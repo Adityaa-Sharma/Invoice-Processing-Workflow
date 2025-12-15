@@ -1,0 +1,243 @@
+{
+  "version": "1.0",
+  "workflow_name": "InvoiceProcessing_v1",
+  "description": "LangGraph invoice processing with HITL checkpoint/resume and Bigtool tool selection.",
+  "config": {
+    "match_threshold": 0.90,
+    "two_way_tolerance_pct": 5,
+    "human_review_queue": "human_review_queue",
+    "checkpoint_table": "checkpoints",
+    "default_db": "sqlite:///./demo.db"
+  },
+  "inputs": {
+    "invoice_payload": {
+      "invoice_id": "string",
+      "vendor_name": "string",
+      "vendor_tax_id": "string",
+      "invoice_date": "string",
+      "due_date": "string",
+      "amount": "number",
+      "currency": "string",
+      "line_items": [
+        {
+          "desc": "string",
+          "qty": "number",
+          "unit_price": "number",
+          "total": "number"
+        }
+      ],
+      "attachments": ["string"]
+    }
+  },
+  "stages": [
+    {
+      "id": "INTAKE",
+      "mode": "deterministic",
+      "agent": "IngestAgent",
+      "description": "Validate payload schema, persist raw invoice payload and attachments metadata. Return raw_id and ingest timestamp.",
+      "servers": ["COMMON"],
+      "bigtool": {
+        "capability": "storage",
+        "pool": ["s3", "gcs", "local_fs"]
+      },
+      "output_schema": {
+        "raw_id": "string",
+        "ingest_ts": "string",
+        "validated": "boolean"
+      }
+    },
+    {
+      "id": "UNDERSTAND",
+      "mode": "deterministic",
+      "agent": "OcrNlpAgent",
+      "description": "Run OCR on attachments, extract text and parse line items, normalize dates/currency, return parsed_invoice.",
+      "servers": ["COMMON", "ATLAS"],
+      "bigtool": {
+        "capability": "ocr",
+        "pool": ["google_vision", "tesseract", "aws_textract"]
+      },
+      "output_schema": {
+        "parsed_invoice": {
+          "invoice_text": "string",
+          "parsed_line_items": "array",
+          "detected_pos": "array",
+          "currency": "string",
+          "parsed_dates": "object"
+        }
+      }
+    },
+    {
+      "id": "PREPARE",
+      "mode": "deterministic",
+      "agent": "NormalizeAgent",
+      "description": "Normalize vendor name, enrich vendor profile and compute flags (risk, missing_info). Use Bigtool to pick enrichment provider.",
+      "servers": ["COMMON", "ATLAS"],
+      "bigtool": {
+        "capability": "enrichment",
+        "pool": ["clearbit", "people_data_labs", "vendor_db"]
+      },
+      "output_schema": {
+        "vendor_profile": "object",
+        "normalized_invoice": "object",
+        "flags": "object"
+      }
+    },
+    {
+      "id": "RETRIEVE",
+      "mode": "deterministic",
+      "agent": "ErpFetchAgent",
+      "description": "Fetch POs, GRNs and historical invoices from ERP/Procurement systems to find candidate matches.",
+      "servers": ["ATLAS"],
+      "bigtool": {
+        "capability": "erp_connector",
+        "pool": ["sap_sandbox", "netsuite", "mock_erp"]
+      },
+      "output_schema": {
+        "matched_pos": "array",
+        "matched_grns": "array",
+        "history": "array"
+      }
+    },
+    {
+      "id": "MATCH_TWO_WAY",
+      "mode": "deterministic",
+      "agent": "MatcherAgent",
+      "description": "Compute 2-way match score between invoice and PO. If match_score >= config.match_threshold set match_result='MATCHED' else 'FAILED'.",
+      "servers": ["COMMON"],
+      "output_schema": {
+        "match_score": "number",
+        "match_result": "string",
+        "tolerance_pct": "number",
+        "match_evidence": "object"
+      }
+    },
+    {
+      "id": "CHECKPOINT_HITL",
+      "mode": "deterministic",
+      "agent": "CheckpointAgent",
+      "description": "If match_result == 'FAILED' persist full state as a checkpoint in DB, create review ticket and push to human review queue. Return checkpoint_id and review_url. Pause workflow.",
+      "trigger_condition": "match_result == 'FAILED'",
+      "servers": ["COMMON"],
+      "bigtool": {
+        "capability": "db",
+        "pool": ["postgres", "sqlite", "dynamodb"]
+      },
+      "output_schema": {
+        "checkpoint_id": "string",
+        "review_url": "string",
+        "paused_reason": "string"
+      }
+    },
+    {
+      "id": "HITL_DECISION",
+      "mode": "non-deterministic",
+      "agent": "HumanReviewAgent",
+      "description": "Wait for human decision (ACCEPT/REJECT). If ACCEPT, resume workflow at RECONCILE. If REJECT, finalize with REQUIRES_MANUAL_HANDLING.",
+      "servers": ["ATLAS"],
+      "output_schema": {
+        "human_decision": "string",
+        "reviewer_id": "string",
+        "resume_token": "string"
+      }
+    },
+    {
+      "id": "RECONCILE",
+      "mode": "deterministic",
+      "agent": "ReconcileAgent",
+      "description": "Reconstruct accounting entries. Build payable/receivable ledger entries.",
+      "servers": ["COMMON"],
+      "output_schema": {
+        "accounting_entries": "array",
+        "reconciliation_report": "object"
+      }
+    },
+    {
+      "id": "APPROVE",
+      "mode": "deterministic",
+      "agent": "ApprovalAgent",
+      "description": "Auto-approve or escalate based on invoice amount and rules.",
+      "servers": ["ATLAS"],
+      "output_schema": {
+        "approval_status": "string",
+        "approver_id": "string"
+      }
+    },
+    {
+      "id": "POSTING",
+      "mode": "deterministic",
+      "agent": "PostingAgent",
+      "description": "Post entries to ERP/AP. Schedule payment.",
+      "servers": ["ATLAS"],
+      "output_schema": {
+        "posted": "boolean",
+        "erp_txn_id": "string",
+        "scheduled_payment_id": "string"
+      }
+    },
+    {
+      "id": "NOTIFY",
+      "mode": "deterministic",
+      "agent": "NotifyAgent",
+      "description": "Notify vendor and internal finance team.",
+      "servers": ["ATLAS"],
+      "bigtool": {
+        "capability": "email",
+        "pool": ["sendgrid", "ses", "smartlead"]
+      },
+      "output_schema": {
+        "notify_status": "object",
+        "notified_parties": "array"
+      }
+    },
+    {
+      "id": "COMPLETE",
+      "mode": "deterministic",
+      "agent": "CompleteAgent",
+      "description": "Produce final structured payload. Output logs. Mark workflow complete.",
+      "servers": ["COMMON"],
+      "output_schema": {
+        "final_payload": "object",
+        "status": "string"
+      }
+    }
+  ],
+  "mcp_servers": {
+    "COMMON": {
+      "description": "Abilities requiring no external data",
+      "abilities": [
+        "validate_schema",
+        "persist_raw",
+        "parse_line_items",
+        "normalize_vendor",
+        "compute_flags",
+        "match_engine",
+        "build_accounting_entries",
+        "create_checkpoint",
+        "finalize_workflow"
+      ]
+    },
+    "ATLAS": {
+      "description": "Abilities requiring external system interaction",
+      "abilities": [
+        "ocr_extract",
+        "enrich_vendor",
+        "fetch_po",
+        "fetch_grn",
+        "fetch_history",
+        "post_to_erp",
+        "schedule_payment",
+        "send_email",
+        "send_slack",
+        "authenticate_user"
+      ]
+    }
+  },
+  "bigtool_pools": {
+    "ocr": ["google_vision", "aws_textract", "tesseract"],
+    "enrichment": ["clearbit", "people_data_labs", "vendor_db"],
+    "erp_connector": ["sap_sandbox", "netsuite", "mock_erp"],
+    "db": ["postgres", "sqlite", "dynamodb"],
+    "email": ["sendgrid", "ses", "smartlead"],
+    "storage": ["s3", "gcs", "local_fs"]
+  }
+}

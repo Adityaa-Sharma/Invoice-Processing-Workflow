@@ -1,0 +1,141 @@
+# Bigtool Pool Configuration
+# Defines available tools for each capability with priority and availability
+
+pools:
+  ocr:
+    description: "OCR providers for document text extraction"
+    tools:
+      - name: google_vision
+        priority: 1
+        available: true
+        config:
+          accuracy: high
+          cost: medium
+      - name: aws_textract
+        priority: 2
+        available: true
+        config:
+          accuracy: high
+          cost: high
+      - name: tesseract
+        priority: 3
+        available: true
+        config:
+          accuracy: medium
+          cost: low
+
+  enrichment:
+    description: "Vendor enrichment data providers"
+    tools:
+      - name: clearbit
+        priority: 1
+        available: true
+        config:
+          data_quality: high
+          coverage: global
+      - name: people_data_labs
+        priority: 2
+        available: true
+        config:
+          data_quality: high
+          coverage: us_focused
+      - name: vendor_db
+        priority: 3
+        available: true
+        config:
+          data_quality: medium
+          coverage: internal
+
+  erp_connector:
+    description: "ERP system connectors"
+    tools:
+      - name: sap_sandbox
+        priority: 1
+        available: false
+        config:
+          system: SAP
+          mode: sandbox
+      - name: netsuite
+        priority: 2
+        available: false
+        config:
+          system: NetSuite
+          mode: sandbox
+      - name: mock_erp
+        priority: 3
+        available: true
+        config:
+          system: Mock
+          mode: demo
+
+  db:
+    description: "Database providers for persistence"
+    tools:
+      - name: postgres
+        priority: 1
+        available: true
+        config:
+          type: relational
+          performance: high
+      - name: sqlite
+        priority: 2
+        available: true
+        config:
+          type: relational
+          performance: medium
+      - name: dynamodb
+        priority: 3
+        available: false
+        config:
+          type: nosql
+          performance: high
+
+  email:
+    description: "Email service providers"
+    tools:
+      - name: sendgrid
+        priority: 1
+        available: true
+        config:
+          deliverability: high
+          templates: true
+      - name: ses
+        priority: 2
+        available: true
+        config:
+          deliverability: high
+          templates: false
+      - name: smartlead
+        priority: 3
+        available: false
+        config:
+          deliverability: medium
+          templates: true
+
+  storage:
+    description: "File storage providers"
+    tools:
+      - name: s3
+        priority: 1
+        available: true
+        config:
+          durability: high
+          region: us-east-1
+      - name: gcs
+        priority: 2
+        available: true
+        config:
+          durability: high
+          region: us-central1
+      - name: local_fs
+        priority: 3
+        available: true
+        config:
+          durability: low
+          path: ./uploads
+
+# Selection strategy
+selection:
+  strategy: priority_with_fallback
+  prefer_cost_effective: false
+  health_check_interval: 60  # seconds
