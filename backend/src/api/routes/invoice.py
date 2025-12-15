@@ -11,7 +11,7 @@ from ...schemas.invoice import (
 )
 from ...graph.workflow import create_invoice_workflow
 from ...graph.state import create_initial_state
-from ...db.checkpoint_store import get_checkpointer
+from ...db.checkpoint_store import get_async_checkpointer
 from ...db.models import HumanReviewQueue
 from ..dependencies import get_db_session
 from ...utils.logger import get_logger
@@ -40,42 +40,42 @@ async def submit_invoice(
         # Generate unique thread ID for this workflow instance
         thread_id = str(uuid4())
         
-        # Create workflow with checkpointer
-        checkpointer = get_checkpointer()
-        workflow = create_invoice_workflow(checkpointer)
-        
-        # Create initial state from invoice payload
-        initial_state = create_initial_state(invoice.model_dump())
-        
-        # Config with thread_id for checkpoint tracking
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        # Run workflow (will pause at HITL if needed)
-        logger.info(f"Starting workflow for thread: {thread_id}")
-        result = await workflow.ainvoke(initial_state, config)
-        
-        # Store result for status queries
-        _workflow_states[thread_id] = {
-            "result": result,
-            "invoice_id": invoice.invoice_id,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        # If workflow paused for HITL, add to review queue
-        if result.get("status") == "PAUSED" and result.get("hitl_checkpoint_id"):
-            _add_to_review_queue(db, thread_id, invoice, result)
-        
-        logger.info(
-            f"Workflow completed/paused for thread: {thread_id}, "
-            f"status: {result.get('status')}, stage: {result.get('current_stage')}"
-        )
-        
-        return InvoiceSubmitResponse(
-            thread_id=thread_id,
-            status=result.get("status", "RUNNING"),
-            current_stage=result.get("current_stage", "INTAKE"),
-            message=_get_status_message(result)
-        )
+        # Create workflow with async checkpointer context manager
+        async with get_async_checkpointer() as checkpointer:
+            workflow = create_invoice_workflow(checkpointer)
+            
+            # Create initial state from invoice payload
+            initial_state = create_initial_state(invoice.model_dump())
+            
+            # Config with thread_id for checkpoint tracking
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Run workflow (will pause at HITL if needed)
+            logger.info(f"Starting workflow for thread: {thread_id}")
+            result = await workflow.ainvoke(initial_state, config)
+            
+            # Store result for status queries
+            _workflow_states[thread_id] = {
+                "result": result,
+                "invoice_id": invoice.invoice_id,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # If workflow paused for HITL, add to review queue
+            if result.get("status") == "PAUSED" and result.get("hitl_checkpoint_id"):
+                _add_to_review_queue(db, thread_id, invoice, result)
+            
+            logger.info(
+                f"Workflow completed/paused for thread: {thread_id}, "
+                f"status: {result.get('status')}, stage: {result.get('current_stage')}"
+            )
+            
+            return InvoiceSubmitResponse(
+                thread_id=thread_id,
+                status=result.get("status", "RUNNING"),
+                current_stage=result.get("current_stage", "INTAKE"),
+                message=_get_status_message(result)
+            )
         
     except Exception as e:
         logger.error(f"Error submitting invoice: {e}")

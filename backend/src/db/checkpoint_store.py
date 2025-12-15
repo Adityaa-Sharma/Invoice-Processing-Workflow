@@ -1,8 +1,10 @@
 """Checkpoint store for LangGraph workflow persistence."""
 import sqlite3
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..config.settings import settings
@@ -10,41 +12,73 @@ from ..utils.logger import get_logger
 
 logger = get_logger("checkpoint_store")
 
+# Global singleton for sync SqliteSaver (thread-safe)
+_sync_checkpointer: Optional[SqliteSaver] = None
+_sync_connection: Optional[sqlite3.Connection] = None
 
-def get_checkpointer(db_url: str = None) -> SqliteSaver:
+
+def get_sync_checkpointer(db_url: str = None) -> SqliteSaver:
     """
-    Get LangGraph checkpoint saver for state persistence.
+    Get synchronous SqliteSaver for state persistence.
+    Uses a singleton pattern with thread-safe connection.
+    """
+    global _sync_checkpointer, _sync_connection
     
-    Uses LangGraph's built-in SqliteSaver for checkpoint storage.
-    This enables workflow pause/resume functionality.
+    if _sync_checkpointer is not None:
+        return _sync_checkpointer
     
-    Args:
-        db_url: Database URL (defaults to settings.DATABASE_URL)
+    db_url = db_url or settings.DATABASE_URL
+    logger.info(f"Creating sync checkpoint saver for: {db_url}")
+    
+    if db_url.startswith("sqlite"):
+        db_path = db_url.replace("sqlite:///", "")
         
-    Returns:
-        SqliteSaver instance for LangGraph checkpointing
+        # Create thread-safe connection
+        _sync_connection = sqlite3.connect(db_path, check_same_thread=False)
+        _sync_checkpointer = SqliteSaver(_sync_connection)
+        
+        logger.info(f"SqliteSaver created for: {db_path}")
+        return _sync_checkpointer
+    
+    else:
+        logger.warning(f"Unsupported DB URL: {db_url}, using MemorySaver")
+        return MemorySaver()
+
+
+@asynccontextmanager
+async def get_async_checkpointer(db_url: str = None):
+    """
+    Async context manager for AsyncSqliteSaver.
+    
+    Usage:
+        async with get_async_checkpointer() as checkpointer:
+            workflow = create_workflow(checkpointer)
+            await workflow.ainvoke(...)
     """
     db_url = db_url or settings.DATABASE_URL
     
-    logger.info(f"Creating checkpoint saver for: {db_url}")
-    
     if db_url.startswith("sqlite"):
-        # Extract path from sqlite URL
         db_path = db_url.replace("sqlite:///", "")
+        # Ensure absolute path
+        if not db_path.startswith("/") and not db_path[1:2] == ":":
+            import os
+            db_path = os.path.join(os.path.dirname(__file__), "..", "..", db_path)
+            db_path = os.path.abspath(db_path)
         
-        # Create connection with check_same_thread=False for async support
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        logger.info(f"Creating async checkpoint saver for: {db_path}")
         
-        # Create and return SqliteSaver
-        saver = SqliteSaver(conn)
-        
-        logger.info(f"SqliteSaver created for: {db_path}")
-        return saver
-    
+        async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
+            logger.info(f"AsyncSqliteSaver initialized, type: {type(saver)}")
+            yield saver
     else:
-        # For other databases, fall back to memory saver
         logger.warning(f"Unsupported DB URL: {db_url}, using MemorySaver")
-        return MemorySaver()
+        yield MemorySaver()
+
+
+# For backwards compatibility - use sync version
+def get_checkpointer(db_url: str = None) -> SqliteSaver:
+    """Get checkpoint saver (sync version for compatibility)."""
+    return get_sync_checkpointer(db_url)
 
 
 def get_memory_checkpointer() -> MemorySaver:
@@ -63,10 +97,11 @@ class CheckpointManager:
     Manager for workflow checkpoints.
     
     Provides higher-level operations on top of LangGraph's checkpointer.
+    Uses the sync SqliteSaver for simplicity.
     """
     
     def __init__(self, checkpointer: Optional[SqliteSaver] = None):
-        self.checkpointer = checkpointer or get_checkpointer()
+        self.checkpointer = checkpointer or get_sync_checkpointer()
         self.logger = get_logger("checkpoint_manager")
     
     def get_checkpoint_state(self, thread_id: str) -> Optional[dict]:

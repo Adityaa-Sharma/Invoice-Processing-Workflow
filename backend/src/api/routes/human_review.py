@@ -12,7 +12,7 @@ from ...schemas.review import (
     ReviewDecisionResponse,
 )
 from ...graph.workflow import create_invoice_workflow
-from ...db.checkpoint_store import get_checkpointer
+from ...db.checkpoint_store import get_async_checkpointer
 from ...db.models import HumanReviewQueue
 from ..dependencies import get_db_session
 from ...utils.logger import get_logger
@@ -153,52 +153,52 @@ async def submit_decision(
                 detail=f"Workflow not found: {decision.thread_id}"
             )
         
-        # Resume workflow with human decision
-        checkpointer = get_checkpointer()
-        workflow = create_invoice_workflow(checkpointer)
-        
-        # Config with thread_id
-        config = {"configurable": {"thread_id": decision.thread_id}}
-        
-        # Resume with Command containing the human decision
-        logger.info(f"Resuming workflow with decision: {decision.decision}")
-        
-        result = await workflow.ainvoke(
-            Command(resume={
-                "decision": decision.decision,
-                "reviewer_id": decision.reviewer_id,
-                "notes": decision.notes or "",
-            }),
-            config
-        )
-        
-        # Update stored state
-        _workflow_states[decision.thread_id]["result"] = result
-        
-        # Determine next stage based on decision
-        if decision.decision == "ACCEPT":
-            next_stage = result.get("current_stage", "RECONCILE")
-            status = result.get("status", "RUNNING")
-            message = "Invoice accepted. Workflow resumed and continuing to completion."
-        else:
-            next_stage = "MANUAL_HANDOFF"
-            status = "REQUIRES_MANUAL_HANDLING"
-            message = "Invoice rejected. Requires manual handling."
-        
-        logger.info(
-            f"Workflow resumed for thread: {decision.thread_id}, "
-            f"next_stage: {next_stage}, status: {status}"
-        )
-        
-        return ReviewDecisionResponse(
-            success=True,
-            thread_id=decision.thread_id,
-            checkpoint_id=decision.checkpoint_id,
-            decision=decision.decision,
-            next_stage=next_stage,
-            status=status,
-            message=message
-        )
+        # Resume workflow with human decision using async context manager
+        async with get_async_checkpointer() as checkpointer:
+            workflow = create_invoice_workflow(checkpointer)
+            
+            # Config with thread_id
+            config = {"configurable": {"thread_id": decision.thread_id}}
+            
+            # Resume with Command containing the human decision
+            logger.info(f"Resuming workflow with decision: {decision.decision}")
+            
+            result = await workflow.ainvoke(
+                Command(resume={
+                    "decision": decision.decision,
+                    "reviewer_id": decision.reviewer_id,
+                    "notes": decision.notes or "",
+                }),
+                config
+            )
+            
+            # Update stored state
+            _workflow_states[decision.thread_id]["result"] = result
+            
+            # Determine next stage based on decision
+            if decision.decision == "ACCEPT":
+                next_stage = result.get("current_stage", "RECONCILE")
+                status = result.get("status", "RUNNING")
+                message = "Invoice accepted. Workflow resumed and continuing to completion."
+            else:
+                next_stage = "MANUAL_HANDOFF"
+                status = "REQUIRES_MANUAL_HANDLING"
+                message = "Invoice rejected. Requires manual handling."
+            
+            logger.info(
+                f"Workflow resumed for thread: {decision.thread_id}, "
+                f"next_stage: {next_stage}, status: {status}"
+            )
+            
+            return ReviewDecisionResponse(
+                success=True,
+                thread_id=decision.thread_id,
+                checkpoint_id=decision.checkpoint_id,
+                decision=decision.decision,
+                next_stage=next_stage,
+                status=status,
+                message=message
+            )
         
     except HTTPException:
         raise

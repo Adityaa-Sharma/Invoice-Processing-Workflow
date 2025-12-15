@@ -5,7 +5,7 @@ from typing import Generator
 from sqlalchemy.orm import Session
 
 from ..db.session import SessionLocal, get_db
-from ..db.checkpoint_store import get_checkpointer, get_memory_checkpointer
+from ..db.checkpoint_store import get_async_checkpointer, get_checkpointer, get_memory_checkpointer
 from ..graph.workflow import create_invoice_workflow
 from ..tools.bigtool_picker import BigtoolPicker
 from ..tools.mcp_router import MCPRouter
@@ -33,7 +33,7 @@ def get_mcp_router() -> MCPRouter:
     return MCPRouter()
 
 
-def get_workflow(use_memory: bool = False):
+async def get_workflow(use_memory: bool = False):
     """
     Get compiled workflow instance.
     
@@ -41,14 +41,15 @@ def get_workflow(use_memory: bool = False):
         use_memory: If True, use in-memory checkpointer (for testing)
         
     Returns:
-        Compiled StateGraph workflow
+        Compiled StateGraph workflow (as async context manager if using DB)
     """
     if use_memory:
         checkpointer = get_memory_checkpointer()
+        return create_invoice_workflow(checkpointer=checkpointer)
     else:
+        # Return the sync checkpointer version for simple cases
         checkpointer = get_checkpointer()
-    
-    return create_invoice_workflow(checkpointer=checkpointer)
+        return create_invoice_workflow(checkpointer=checkpointer)
 
 
 def get_db_session() -> Generator[Session, None, None]:
