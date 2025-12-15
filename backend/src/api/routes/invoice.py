@@ -62,7 +62,7 @@ async def submit_invoice(
         }
         
         # If workflow paused for HITL, add to review queue
-        if result.get("status") == "PAUSED" and result.get("checkpoint_id"):
+        if result.get("status") == "PAUSED" and result.get("hitl_checkpoint_id"):
             _add_to_review_queue(db, thread_id, invoice, result)
         
         logger.info(
@@ -106,7 +106,7 @@ async def get_invoice_status(thread_id: str) -> InvoiceStatusResponse:
         current_stage=result.get("current_stage", ""),
         match_score=result.get("match_score"),
         match_result=result.get("match_result"),
-        checkpoint_id=result.get("checkpoint_id"),
+        checkpoint_id=result.get("hitl_checkpoint_id"),
         review_url=result.get("review_url"),
         erp_txn_id=result.get("erp_txn_id"),
         final_payload=result.get("final_payload"),
@@ -126,7 +126,7 @@ def _add_to_review_queue(
         review_item = HumanReviewQueue(
             id=str(uuid4()),
             thread_id=thread_id,
-            checkpoint_id=result.get("checkpoint_id", ""),
+            checkpoint_id=result.get("hitl_checkpoint_id", ""),
             invoice_id=invoice.invoice_id,
             vendor_name=invoice.vendor_name,
             amount=invoice.amount,
@@ -156,7 +156,7 @@ def _get_status_message(result: dict) -> str:
     if status == "COMPLETED":
         return f"Invoice processing completed successfully. Transaction ID: {result.get('erp_txn_id', 'N/A')}"
     elif status == "PAUSED":
-        return f"Invoice requires human review. Checkpoint: {result.get('checkpoint_id', 'N/A')}"
+        return f"Invoice requires human review. Checkpoint: {result.get('hitl_checkpoint_id', 'N/A')}"
     elif status == "REQUIRES_MANUAL_HANDLING":
         return "Invoice rejected during review. Requires manual handling."
     elif status == "FAILED":

@@ -1,14 +1,20 @@
-"""Bigtool Picker for dynamic tool selection from pools."""
+"""Bigtool Picker - Orchestrator for MCP servers.
+
+BigtoolPicker acts as the main orchestrator that routes tool requests
+to the appropriate MCP server (COMMON or ATLAS) based on capability.
+"""
+import asyncio
 from typing import Optional, Any
 from ..utils.logger import get_logger
+from ..mcp.client import MCPClient
 
 
 class BigtoolPicker:
     """
-    Singleton service for selecting tools from pools.
+    Singleton orchestrator for MCP server tools.
     
-    Bigtool dynamically selects the appropriate tool from a pool
-    based on capability requirements, availability, and context.
+    BigtoolPicker manages tool selection and routes execution requests
+    to the appropriate MCP server (COMMON for internal ops, ATLAS for external).
     """
     
     _instance: Optional["BigtoolPicker"] = None
@@ -21,6 +27,22 @@ class BigtoolPicker:
         "db": ["postgres", "sqlite", "dynamodb"],
         "email": ["sendgrid", "ses", "smartlead"],
         "storage": ["s3", "gcs", "local_fs"],
+    }
+    
+    # Mapping capabilities to MCP tools
+    CAPABILITY_TO_MCP_TOOL = {
+        "ocr": "extract_ocr",
+        "enrichment": "enrich_vendor",
+        "erp_connector": "post_to_erp",
+        "db": "persist_invoice",
+        "email": "send_notification",
+        "validation": "validate_invoice_schema",
+        "parsing": "parse_line_items",
+        "normalization": "normalize_vendor",
+        "po_data": "fetch_po_data",
+        "grn_data": "fetch_grn_data",
+        "payment": "schedule_payment",
+        "checkpoint": "create_checkpoint",
     }
     
     # Simulated tool availability (in production: real health checks)
@@ -98,8 +120,105 @@ class BigtoolPicker:
     def __init__(self):
         if self._initialized:
             return
+        self._mcp_client: Optional[MCPClient] = None
         self.logger = get_logger("bigtool")
         self._initialized = True
+    
+    @property
+    def mcp_client(self) -> MCPClient:
+        """Get or create MCP client instance."""
+        if self._mcp_client is None:
+            self._mcp_client = MCPClient()
+        return self._mcp_client
+    
+    async def execute(
+        self,
+        capability: str,
+        params: dict[str, Any] = None,
+        context: dict = None
+    ) -> dict[str, Any]:
+        """
+        Execute a capability via MCP server.
+        
+        This is the main orchestration method that:
+        1. Selects the best tool for the capability
+        2. Maps capability to MCP tool
+        3. Routes request to appropriate MCP server
+        4. Returns the result
+        
+        Args:
+            capability: Required capability (e.g., "ocr", "enrichment", "validation")
+            params: Parameters to pass to the MCP tool
+            context: Optional context for tool selection
+            
+        Returns:
+            dict with execution result
+        """
+        params = params or {}
+        context = context or {}
+        
+        # Map capability to MCP tool
+        mcp_tool = self.CAPABILITY_TO_MCP_TOOL.get(capability)
+        if not mcp_tool:
+            self.logger.error(f"No MCP tool mapping for capability: {capability}")
+            return {
+                "success": False,
+                "error": f"No MCP tool mapping for capability: {capability}",
+                "capability": capability
+            }
+        
+        # Select best tool from pool (for logging/context)
+        selection = self.select(capability, context)
+        
+        self.logger.info(
+            f"Executing capability: {capability} via MCP tool: {mcp_tool}",
+            extra={"extra": {
+                "capability": capability,
+                "mcp_tool": mcp_tool,
+                "selected_implementation": selection.get("selected_tool"),
+                "params": params
+            }}
+        )
+        
+        try:
+            # Route to MCP server via client
+            result = await self.mcp_client.call_tool(mcp_tool, params)
+            
+            return {
+                "success": True,
+                "capability": capability,
+                "mcp_tool": mcp_tool,
+                "selected_implementation": selection.get("selected_tool"),
+                "result": result
+            }
+        except Exception as e:
+            self.logger.error(f"MCP tool execution failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "capability": capability,
+                "mcp_tool": mcp_tool
+            }
+    
+    def execute_sync(
+        self,
+        capability: str,
+        params: dict[str, Any] = None,
+        context: dict = None
+    ) -> dict[str, Any]:
+        """
+        Synchronous wrapper for execute().
+        
+        Use this when calling from synchronous code.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(
+            self.execute(capability, params, context)
+        )
     
     def select(
         self,

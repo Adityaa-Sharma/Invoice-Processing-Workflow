@@ -150,9 +150,9 @@ async def run_hitl_workflow():
     print(f"\n⏸️  Workflow Status: {result.get('status')}")
     print(f"   Current Stage: {result.get('current_stage')}")
     
-    if result.get("checkpoint_id"):
+    if result.get("hitl_checkpoint_id"):
         print(f"\n🔖 Checkpoint Created:")
-        print(f"   Checkpoint ID: {result.get('checkpoint_id')}")
+        print(f"   Checkpoint ID: {result.get('hitl_checkpoint_id')}")
         print(f"   Review URL: {result.get('review_url')}")
         print(f"   Paused Reason: {result.get('paused_reason')}")
         

@@ -73,14 +73,14 @@ class CheckpointAgent(BaseAgent):
                 stage="CHECKPOINT_HITL",
                 action="create_checkpoint",
                 result={
-                    "checkpoint_id": checkpoint_id,
+                    "hitl_checkpoint_id": checkpoint_id,
                     "match_score": match_score
                 },
                 bigtool_selection=bigtool_selection["CHECKPOINT_HITL"]
             )
             
             return {
-                "checkpoint_id": checkpoint_id,
+                "hitl_checkpoint_id": checkpoint_id,
                 "review_url": review_url,
                 "paused_reason": paused_reason,
                 "current_stage": "CHECKPOINT_HITL",
@@ -90,7 +90,7 @@ class CheckpointAgent(BaseAgent):
                     "CHECKPOINT_HITL",
                     "checkpoint_created",
                     {
-                        "checkpoint_id": checkpoint_id,
+                        "hitl_checkpoint_id": checkpoint_id,
                         "invoice_id": invoice.get("invoice_id"),
                         "match_score": match_score,
                         "paused_reason": paused_reason,

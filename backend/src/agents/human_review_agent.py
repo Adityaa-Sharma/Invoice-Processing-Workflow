@@ -20,12 +20,12 @@ class HumanReviewAgent(BaseAgent):
         super().__init__(name="HumanReviewAgent", config=config)
     
     def get_required_fields(self) -> list[str]:
-        return ["checkpoint_id", "human_decision"]
+        return ["hitl_checkpoint_id", "human_decision"]
     
     def validate_input(self, state: InvoiceWorkflowState) -> bool:
         """Validate checkpoint exists and decision provided."""
         return (
-            state.get("checkpoint_id") is not None and
+            state.get("hitl_checkpoint_id") is not None and
             state.get("human_decision") is not None
         )
     
@@ -46,7 +46,7 @@ class HumanReviewAgent(BaseAgent):
             decision = state.get("human_decision", "")
             reviewer_id = state.get("reviewer_id", "unknown")
             reviewer_notes = state.get("reviewer_notes", "")
-            checkpoint_id = state.get("checkpoint_id", "")
+            checkpoint_id = state.get("hitl_checkpoint_id", "")
             
             # Generate resume token
             resume_token = f"RESUME-{uuid4().hex[:8].upper()}"

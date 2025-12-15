@@ -95,7 +95,7 @@ async def hitl_decision_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     logger.info("Interrupting for human review")
     human_input = interrupt({
         "type": "human_review",
-        "checkpoint_id": state.get("checkpoint_id"),
+        "hitl_checkpoint_id": state.get("hitl_checkpoint_id"),
         "invoice_id": state.get("invoice_payload", {}).get("invoice_id"),
         "reason": state.get("paused_reason"),
         "review_url": state.get("review_url"),
@@ -197,7 +197,7 @@ async def manual_handoff_node(state: InvoiceWorkflowState) -> dict[str, Any]:
             "reason": "Invoice rejected during human review",
             "reviewer_id": state.get("reviewer_id"),
             "reviewer_notes": state.get("reviewer_notes"),
-            "checkpoint_id": state.get("checkpoint_id"),
+            "hitl_checkpoint_id": state.get("hitl_checkpoint_id"),
         },
         "audit_log": [{
             "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),

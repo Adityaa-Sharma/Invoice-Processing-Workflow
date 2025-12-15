@@ -1,8 +1,10 @@
 """Base agent class for all workflow agents."""
 from abc import ABC, abstractmethod
-from typing import Any
-from ..graph.state import InvoiceWorkflowState
+from typing import Any, TYPE_CHECKING
 from ..utils.logger import get_logger, create_audit_entry
+
+if TYPE_CHECKING:
+    from ..graph.state import InvoiceWorkflowState
 
 
 class BaseAgent(ABC):
@@ -26,7 +28,7 @@ class BaseAgent(ABC):
         self.logger = get_logger(f"agent.{name.lower()}")
     
     @abstractmethod
-    async def execute(self, state: InvoiceWorkflowState) -> dict[str, Any]:
+    async def execute(self, state: "InvoiceWorkflowState") -> dict[str, Any]:
         """
         Execute the agent's logic.
         
@@ -38,7 +40,7 @@ class BaseAgent(ABC):
         """
         pass
     
-    def validate_input(self, state: InvoiceWorkflowState) -> bool:
+    def validate_input(self, state: "InvoiceWorkflowState") -> bool:
         """
         Validate required input fields exist.
         
@@ -116,7 +118,7 @@ class BaseAgent(ABC):
         self,
         stage: str,
         error: Exception,
-        state: InvoiceWorkflowState
+        state: "InvoiceWorkflowState"
     ) -> dict[str, Any]:
         """
         Handle error and return error state updates.

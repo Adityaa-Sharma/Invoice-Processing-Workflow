@@ -87,7 +87,7 @@ class CompleteAgent(BaseAgent):
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "match_score": state.get("match_score"),
                 "match_result": state.get("match_result"),
-                "required_hitl": state.get("checkpoint_id") is not None,
+                "required_hitl": state.get("hitl_checkpoint_id") is not None,
                 "hitl_decision": state.get("human_decision")
             },
             "erp": {

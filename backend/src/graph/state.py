@@ -63,7 +63,7 @@ class InvoiceWorkflowState(TypedDict):
     match_evidence: Optional[MatchEvidence]
     
     # ===== CHECKPOINT_HITL output =====
-    checkpoint_id: Optional[str]
+    hitl_checkpoint_id: Optional[str]
     review_url: Optional[str]
     paused_reason: Optional[str]
     
@@ -143,7 +143,7 @@ def create_initial_state(invoice_payload: dict) -> InvoiceWorkflowState:
         "match_evidence": None,
         
         # CHECKPOINT_HITL
-        "checkpoint_id": None,
+        "hitl_checkpoint_id": None,
         "review_url": None,
         "paused_reason": None,
         

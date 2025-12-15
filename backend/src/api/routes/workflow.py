@@ -70,7 +70,7 @@ async def get_workflow_status(thread_id: str) -> WorkflowStatusResponse:
     # Determine if HITL is needed
     requires_hitl = (
         result.get("status") == "PAUSED" and
-        result.get("checkpoint_id") is not None
+        result.get("hitl_checkpoint_id") is not None
     )
     
     return WorkflowStatusResponse(
@@ -81,7 +81,7 @@ async def get_workflow_status(thread_id: str) -> WorkflowStatusResponse:
         stages_completed=completed,
         stages_pending=pending,
         requires_human_review=requires_hitl,
-        checkpoint_id=result.get("checkpoint_id"),
+        checkpoint_id=result.get("hitl_checkpoint_id"),
         review_url=result.get("review_url"),
         match_score=result.get("match_score"),
         match_result=result.get("match_result"),
