@@ -96,7 +96,7 @@ def main():
         print("\n[3/3] Starting Agent API on port 8000...")
         api_proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", 
-             "src.api.main:app", 
+             "src.main:app", 
              "--host", "0.0.0.0", 
              "--port", "8000",
              "--reload"],
