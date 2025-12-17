@@ -1,7 +1,8 @@
 """Invoice submission and status endpoints."""
+import asyncio
 from uuid import uuid4
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from ...schemas.invoice import (
@@ -11,10 +12,12 @@ from ...schemas.invoice import (
 )
 from ...graph.workflow import create_invoice_workflow
 from ...graph.state import create_initial_state
+from ...graph.nodes import set_thread_id
 from ...db.checkpoint_store import get_checkpointer
 from ...db.models import HumanReviewQueue
 from ..dependencies import get_db_session
 from ...utils.logger import get_logger
+from ...services.event_emitter import emit_log_message, emit_workflow_complete
 
 router = APIRouter(prefix="/invoice", tags=["Invoice"])
 logger = get_logger("api.invoice")
@@ -23,16 +26,79 @@ logger = get_logger("api.invoice")
 _workflow_states = {}
 
 
+async def _run_workflow_async(
+    thread_id: str,
+    invoice_dict: dict,
+    db_session_factory
+) -> None:
+    """
+    Run the workflow asynchronously in the background.
+    This allows the SSE connection to be established before workflow starts.
+    """
+    try:
+        # Delay to ensure SSE connection is established by frontend
+        await asyncio.sleep(1.0)
+        
+        # Set thread ID for event emission in this context (backup for ContextVar)
+        set_thread_id(thread_id)
+        
+        # Emit starting event
+        await emit_log_message(thread_id, "info", f"🚀 Workflow execution starting...")
+        
+        # Get checkpointer and create workflow
+        checkpointer = get_checkpointer()
+        workflow = create_invoice_workflow(checkpointer)
+        
+        # Create initial state from invoice payload WITH thread_id
+        initial_state = create_initial_state(invoice_dict, thread_id=thread_id)
+        
+        # Config with thread_id for checkpoint tracking
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Run workflow
+        logger.info(f"🚀 Background workflow starting for thread: {thread_id}")
+        result = await workflow.ainvoke(initial_state, config)
+        
+        # Store result for status queries
+        _workflow_states[thread_id] = {
+            "result": result,
+            "invoice_id": invoice_dict.get("invoice_id"),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Emit workflow complete event
+        final_status = result.get("status", "COMPLETED")
+        await emit_workflow_complete(thread_id, final_status, {
+            "current_stage": result.get("current_stage"),
+            "match_result": result.get("match_result"),
+        })
+        
+        logger.info(
+            f"✅ Background workflow completed for thread: {thread_id}, "
+            f"status: {result.get('status')}, stage: {result.get('current_stage')}"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Background workflow error for thread {thread_id}: {e}")
+        await emit_workflow_complete(thread_id, "FAILED", {"error": str(e)})
+        _workflow_states[thread_id] = {
+            "result": {"status": "FAILED", "error": str(e)},
+            "invoice_id": invoice_dict.get("invoice_id"),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+
 @router.post("/submit", response_model=InvoiceSubmitResponse)
 async def submit_invoice(
     invoice: InvoicePayload,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db_session)
 ) -> InvoiceSubmitResponse:
     """
     Submit an invoice for processing.
     
-    Starts the invoice processing workflow and returns a thread_id
-    for tracking the workflow status.
+    Starts the invoice processing workflow in the background and returns 
+    a thread_id immediately for SSE subscription.
     """
     logger.info(f"Submitting invoice: {invoice.invoice_id}")
     
@@ -40,46 +106,32 @@ async def submit_invoice(
         # Generate unique thread ID for this workflow instance
         thread_id = str(uuid4())
         
-        # Get checkpointer (MemorySaver - supports async)
-        checkpointer = get_checkpointer()
-        workflow = create_invoice_workflow(checkpointer)
-        
-        # Create initial state from invoice payload
-        initial_state = create_initial_state(invoice.model_dump())
-        
-        # Config with thread_id for checkpoint tracking
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        # Run workflow asynchronously
-        logger.info(f"Starting workflow for thread: {thread_id}")
-        result = await workflow.ainvoke(initial_state, config)
-        
-        # Store result for status queries
+        # Initialize workflow state as PENDING
         _workflow_states[thread_id] = {
-            "result": result,
+            "result": {"status": "PENDING", "current_stage": "INTAKE"},
             "invoice_id": invoice.invoice_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        # If workflow paused for HITL, add to review queue
-        if result.get("status") == "PAUSED" and result.get("hitl_checkpoint_id"):
-            _add_to_review_queue(db, thread_id, invoice, result)
+        # Emit initial log (before background task starts)
+        await emit_log_message(thread_id, "info", f"📋 Invoice {invoice.invoice_id} received, preparing workflow...")
         
-        logger.info(
-            f"Workflow completed/paused for thread: {thread_id}, "
-            f"status: {result.get('status')}, stage: {result.get('current_stage')}"
-        )
+        # Schedule workflow to run in background using asyncio.create_task
+        # This allows the response to return immediately so frontend can connect to SSE
+        asyncio.create_task(_run_workflow_async(
+            thread_id=thread_id,
+            invoice_dict=invoice.model_dump(),
+            db_session_factory=None  # We'll handle DB in background if needed
+        ))
+        
+        logger.info(f"📤 Workflow scheduled for thread: {thread_id}, returning immediately")
         
         return InvoiceSubmitResponse(
             thread_id=thread_id,
-            status=result.get("status", "RUNNING"),
-            current_stage=result.get("current_stage", "INTAKE"),
-            message=_get_status_message(result)
+            status="RUNNING",
+            current_stage="INTAKE",
+            message=f"Workflow started for invoice {invoice.invoice_id}. Connect to SSE for real-time updates."
         )
-        
-    except Exception as e:
-        logger.error(f"Error submitting invoice: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
         
     except Exception as e:
         logger.error(f"Error submitting invoice: {e}")

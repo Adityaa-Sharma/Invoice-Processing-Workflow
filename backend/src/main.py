@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config.settings import settings
 from .db.session import init_db
-from .api.routes import health, invoice, human_review, workflow
+from .api.routes import health, invoice, human_review, workflow, events
 from .utils.logger import get_logger
 
 logger = get_logger("main")
@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(invoice.router)
     app.include_router(human_review.router)
     app.include_router(workflow.router)
+    app.include_router(events.router)
     
     return app
 

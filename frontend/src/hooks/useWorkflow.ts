@@ -28,8 +28,9 @@ export interface Invoice {
 export interface LogEntry {
   stage: string;
   message: string;
-  status: 'success' | 'error' | 'info';
+  status: 'success' | 'error' | 'info' | 'warning';
   time: string;
+  details?: Record<string, unknown>;
 }
 
 export interface WorkflowState {
@@ -38,9 +39,23 @@ export interface WorkflowState {
   status: 'idle' | 'running' | 'hitl' | 'done' | 'error';
   logs: LogEntry[];
   hitlData: { reason: string; checkpoint_id: string } | null;
+  stageData: Record<string, unknown>;
 }
 
-// Workflow hook
+// SSE Event types
+interface SSEEvent {
+  type: 'stage_update' | 'log' | 'connected' | 'heartbeat';
+  thread_id: string;
+  stage?: string;
+  status?: string;
+  data?: Record<string, unknown>;
+  level?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  timestamp: string;
+}
+
+// Workflow hook with SSE support
 export function useWorkflow() {
   const [state, setState] = useState<WorkflowState>({
     workflowId: null,
@@ -48,21 +63,138 @@ export function useWorkflow() {
     status: 'idle',
     logs: [],
     hitlData: null,
+    stageData: {},
   });
   const [loading, setLoading] = useState(false);
-  const pollRef = useRef<number>();
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info') => {
+  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info', details?: Record<string, unknown>) => {
     setState((s: WorkflowState) => ({
       ...s,
-      logs: [...s.logs, { stage, message, status, time: new Date().toLocaleTimeString() }],
+      logs: [...s.logs, { stage, message, status, time: new Date().toLocaleTimeString(), details }],
     }));
   }, []);
 
+  // Connect to SSE for real-time updates
+  const connectSSE = useCallback((threadId: string) => {
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    console.log(`🔌 Connecting to SSE for thread: ${threadId}`);
+    const eventSource = new EventSource(`${API}/events/workflow/${threadId}`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onopen = () => {
+      console.log('✅ SSE connection opened');
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data: SSEEvent = JSON.parse(event.data);
+        console.log('📡 SSE Event:', data);
+
+        if (data.type === 'connected') {
+          addLog('SSE', 'Connected to real-time updates', 'info');
+          return;
+        }
+
+        if (data.type === 'heartbeat') {
+          // Ignore heartbeats
+          return;
+        }
+
+        if (data.type === 'log') {
+          const logStatus = data.level === 'error' ? 'error' : 
+                           data.level === 'warning' ? 'warning' : 'info';
+          addLog(data.stage || 'SYSTEM', data.message || '', logStatus, data.details);
+          return;
+        }
+
+        if (data.type === 'stage_update') {
+          const stage = data.stage || '';
+          const stageStatus = data.status || '';
+
+          setState((s: WorkflowState) => {
+            const newState = { ...s };
+
+            // Update current stage
+            if (stageStatus === 'started') {
+              newState.currentStage = stage;
+              newState.status = 'running';
+            }
+
+            // Store stage data
+            if (stageStatus === 'completed' && data.data) {
+              newState.stageData = { ...s.stageData, [stage]: data.data };
+            }
+
+            // Handle workflow completion
+            if (stageStatus === 'workflow_complete') {
+              const finalStatus = data.data?.final_status;
+              if (finalStatus === 'COMPLETED') {
+                newState.status = 'done';
+              } else if (finalStatus === 'REQUIRES_MANUAL_HANDLING') {
+                newState.status = 'error';
+              }
+              // Close SSE connection
+              eventSource.close();
+            }
+
+            // Handle paused for HITL
+            if (stage === 'CHECKPOINT_HITL' && stageStatus === 'completed') {
+              newState.status = 'hitl';
+              newState.hitlData = {
+                reason: 'Match failed - manual review required',
+                checkpoint_id: (data.data?.checkpoint_id as string) || '',
+              };
+            }
+
+            return newState;
+          });
+
+          // Add log for stage events
+          if (stageStatus === 'started') {
+            addLog(stage, `▶️ Starting ${stage}...`, 'info');
+          } else if (stageStatus === 'completed') {
+            addLog(stage, `✅ ${stage} completed`, 'success', data.data);
+          } else if (stageStatus === 'failed') {
+            addLog(stage, `❌ ${stage} failed: ${data.data?.error}`, 'error');
+          }
+        }
+      } catch (err) {
+        console.error('SSE parse error:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('SSE error:', err);
+      // Don't add error log for normal closure
+      if (eventSource.readyState === EventSource.CLOSED) {
+        console.log('SSE connection closed');
+      } else {
+        addLog('SSE', 'Connection error - falling back to polling', 'warning');
+        eventSource.close();
+        // Fallback to polling
+        pollStatus(threadId);
+      }
+    };
+
+    return eventSource;
+  }, [addLog]);
+
   const submit = useCallback(async (invoice: Invoice) => {
     setLoading(true);
-    setState((s: WorkflowState) => ({ ...s, logs: [], status: 'running', hitlData: null }));
-    addLog('SUBMIT', `Submitting invoice for ${invoice.vendor_name}`, 'info');
+    setState((s: WorkflowState) => ({ 
+      ...s, 
+      logs: [], 
+      status: 'running', 
+      hitlData: null,
+      stageData: {},
+      currentStage: '',
+    }));
+    addLog('SUBMIT', `🚀 Submitting invoice for ${invoice.vendor_name}`, 'info');
 
     try {
       const res = await fetch(`${API}/invoice/submit`, {
@@ -74,8 +206,10 @@ export function useWorkflow() {
       
       if (data.thread_id) {
         setState((s: WorkflowState) => ({ ...s, workflowId: data.thread_id }));
-        addLog('SUBMIT', `Workflow started: ${data.thread_id}`, 'success');
-        pollStatus(data.thread_id);
+        addLog('SUBMIT', `✅ Workflow started: ${data.thread_id}`, 'success');
+        
+        // Connect to SSE for real-time updates
+        connectSSE(data.thread_id);
       } else {
         throw new Error(data.detail || data.message || 'Failed to start workflow');
       }
@@ -85,8 +219,9 @@ export function useWorkflow() {
     } finally {
       setLoading(false);
     }
-  }, [addLog]);
+  }, [addLog, connectSSE]);
 
+  // Fallback polling (used if SSE fails)
   const pollStatus = useCallback(async (wfId: string) => {
     const poll = async () => {
       try {
@@ -123,12 +258,12 @@ export function useWorkflow() {
         // Check completion
         if (data.status === 'COMPLETED' || data.current_stage === 'COMPLETE') {
           setState((s: WorkflowState) => ({ ...s, status: 'done' }));
-          addLog('COMPLETE', 'Workflow completed successfully!', 'success');
+          addLog('COMPLETE', '🎉 Workflow completed successfully!', 'success');
           return;
         }
 
         // Continue polling
-        pollRef.current = window.setTimeout(() => poll(), 1000);
+        setTimeout(() => poll(), 1000);
       } catch (err) {
         addLog('ERROR', `Poll error: ${err}`, 'error');
       }
@@ -154,24 +289,32 @@ export function useWorkflow() {
       });
       
       if (res.ok) {
-        addLog('HITL', approved ? 'Approved by reviewer' : 'Rejected by reviewer', approved ? 'success' : 'error');
+        addLog('HITL', approved ? '✅ Approved by reviewer' : '❌ Rejected by reviewer', approved ? 'success' : 'error');
         setState((s: WorkflowState) => ({ ...s, status: 'running', hitlData: null }));
-        if (state.workflowId) pollStatus(state.workflowId);
+        // Reconnect SSE for continued updates
+        if (state.workflowId) connectSSE(state.workflowId);
       }
     } catch (err) {
       addLog('ERROR', String(err), 'error');
     } finally {
       setLoading(false);
     }
-  }, [state.hitlData, state.workflowId, addLog, pollStatus]);
+  }, [state.hitlData, state.workflowId, addLog, connectSSE]);
 
   const reset = useCallback(() => {
-    if (pollRef.current) clearTimeout(pollRef.current);
-    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], hitlData: null });
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], hitlData: null, stageData: {} });
   }, []);
 
   useEffect(() => {
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+    return () => { 
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
   }, []);
 
   return { state, loading, submit, resolveHitl, reset };

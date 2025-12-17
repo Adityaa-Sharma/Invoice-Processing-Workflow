@@ -94,6 +94,7 @@ class InvoiceWorkflowState(TypedDict):
     final_payload: Optional[dict]
     
     # ===== Workflow Metadata =====
+    thread_id: str  # Workflow thread ID for event emission
     current_stage: str
     status: str  # "RUNNING" | "PAUSED" | "COMPLETED" | "FAILED" | "REQUIRES_MANUAL_HANDLING"
     error: Optional[str]
@@ -104,12 +105,13 @@ class InvoiceWorkflowState(TypedDict):
     error_log: Annotated[list[dict], add]  # Append-only error entries
 
 
-def create_initial_state(invoice_payload: dict) -> InvoiceWorkflowState:
+def create_initial_state(invoice_payload: dict, thread_id: str = "") -> InvoiceWorkflowState:
     """
     Create initial workflow state from invoice payload.
     
     Args:
         invoice_payload: Raw invoice data
+        thread_id: Workflow thread ID for event emission
         
     Returns:
         Initial InvoiceWorkflowState
@@ -174,6 +176,7 @@ def create_initial_state(invoice_payload: dict) -> InvoiceWorkflowState:
         "final_payload": None,
         
         # Metadata
+        "thread_id": thread_id,
         "current_stage": "START",
         "status": "RUNNING",
         "error": None,
