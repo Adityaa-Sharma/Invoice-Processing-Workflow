@@ -4,3 +4,7 @@ pycache__/
 .venv/
 frontend/node_modules/
 frontend/dist/
+
+backend/__pycache__/
+backend/*.sqlite3
+backend/.env

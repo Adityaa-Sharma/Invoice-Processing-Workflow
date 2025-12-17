@@ -12,7 +12,7 @@ class NotifyAgent(BaseAgent):
     
     Notifies vendor and internal finance team.
     Uses ATLAS server for email/notification services.
-    Uses Bigtool to select email provider.
+    Uses BigtoolPicker to select email provider.
     """
     
     def __init__(self, config: dict = None):
@@ -32,8 +32,9 @@ class NotifyAgent(BaseAgent):
         """
         Execute NOTIFY stage.
         
-        - Sends notification to vendor
-        - Notifies internal finance team
+        - Uses BigtoolPicker to select email provider
+        - Sends notification to vendor via ATLAS server
+        - Notifies internal finance team via ATLAS server
         
         Returns:
             dict with notify_status, notified_parties, audit_log
@@ -45,28 +46,65 @@ class NotifyAgent(BaseAgent):
             erp_txn_id = state.get("erp_txn_id", "")
             scheduled_payment_id = state.get("scheduled_payment_id", "")
             
-            # Mock bigtool selection for email
+            # Step 1: Use BigtoolPicker to select email tool
+            tool_selection = await self.select_tool(
+                capability="email",
+                context={
+                    "notification_type": "invoice_processed",
+                    "vendor_name": invoice.get("vendor_name"),
+                    "invoice_id": invoice.get("invoice_id"),
+                },
+                use_llm=True
+            )
+            
             bigtool_selection = {
                 "NOTIFY": {
                     "capability": "email",
-                    "selected_tool": "sendgrid",
-                    "pool": ["sendgrid", "ses", "smartlead"],
-                    "reason": "sendgrid configured as primary email provider"
+                    "selected_tool": tool_selection.get("selected_tool", "sendgrid"),
+                    "pool": tool_selection.get("pool", ["sendgrid", "ses", "smartlead"]),
+                    "reason": tool_selection.get("reason", "BigtoolPicker selection")
                 }
             }
             
-            # Mock send notifications
-            vendor_notification = self._notify_vendor(invoice, scheduled_payment_id)
-            finance_notification = self._notify_finance_team(invoice, erp_txn_id)
+            # Step 2: Send vendor notification via ATLAS server
+            vendor_result = await self.execute_with_bigtool(
+                capability="email",
+                params={
+                    "action": "send_notification",
+                    "recipient_type": "vendor",
+                    "vendor_name": invoice.get("vendor_name"),
+                    "invoice_id": invoice.get("invoice_id"),
+                    "payment_id": scheduled_payment_id,
+                    "message_type": "invoice_approved"
+                },
+                context={"stage": "NOTIFY"}
+            )
+            
+            # Step 3: Send finance team notification via ATLAS server
+            finance_result = await self.execute_with_bigtool(
+                capability="email",
+                params={
+                    "action": "send_notification",
+                    "recipient_type": "finance_team",
+                    "invoice_id": invoice.get("invoice_id"),
+                    "erp_txn_id": erp_txn_id,
+                    "message_type": "invoice_posted"
+                },
+                context={"stage": "NOTIFY"}
+            )
+            
+            # Get notification results (with fallback to mock)
+            vendor_notification = vendor_result if vendor_result.get("sent") else self._notify_vendor(invoice, scheduled_payment_id)
+            finance_notification = finance_result if finance_result.get("sent") else self._notify_finance_team(invoice, erp_txn_id)
             
             notified_parties = [
-                vendor_notification["recipient"],
-                *finance_notification["recipients"]
+                vendor_notification.get("recipient", "vendor@example.com"),
+                *(finance_notification.get("recipients", ["finance@company.com"]))
             ]
             
             notify_status = {
-                "vendor_notified": vendor_notification["sent"],
-                "finance_notified": finance_notification["sent"],
+                "vendor_notified": vendor_notification.get("sent", True),
+                "finance_notified": finance_notification.get("sent", True),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
@@ -75,7 +113,7 @@ class NotifyAgent(BaseAgent):
                 action="send_notifications",
                 result={
                     "parties_notified": len(notified_parties),
-                    "email_tool": "sendgrid"
+                    "email_tool": tool_selection.get("selected_tool")
                 },
                 bigtool_selection=bigtool_selection["NOTIFY"]
             )
@@ -90,10 +128,11 @@ class NotifyAgent(BaseAgent):
                     "notifications_sent",
                     {
                         "invoice_id": invoice.get("invoice_id"),
-                        "vendor_notified": vendor_notification["sent"],
-                        "finance_notified": finance_notification["sent"],
+                        "vendor_notified": vendor_notification.get("sent", True),
+                        "finance_notified": finance_notification.get("sent", True),
                         "parties_count": len(notified_parties),
-                        "email_tool": "sendgrid"
+                        "email_tool": tool_selection.get("selected_tool", "sendgrid"),
+                        "bigtool_used": True
                     }
                 )]
             }

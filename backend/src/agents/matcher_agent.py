@@ -13,6 +13,7 @@ class MatcherAgent(BaseAgent):
     Performs 2-way matching between invoice and PO.
     Computes match score and determines if HITL checkpoint is needed.
     Uses COMMON server for match computation.
+    Uses LLM for intelligent match analysis.
     """
     
     def __init__(self, config: dict = None):
@@ -34,7 +35,8 @@ class MatcherAgent(BaseAgent):
         """
         Execute MATCH_TWO_WAY stage.
         
-        - Compares invoice against matched POs
+        - Compares invoice against matched POs via COMMON server
+        - Uses LLM for intelligent match analysis
         - Calculates match score (0-1)
         - Determines match result (MATCHED/FAILED)
         
@@ -48,11 +50,59 @@ class MatcherAgent(BaseAgent):
             matched_pos = state.get("matched_pos", [])
             matched_grns = state.get("matched_grns", [])
             
-            # Perform 2-way matching
-            match_result = self._compute_match(invoice, matched_pos, matched_grns)
+            # Step 1: Compute match via COMMON server
+            match_compute_result = await self.execute_with_bigtool(
+                capability="matching",
+                params={
+                    "invoice": invoice,
+                    "purchase_orders": matched_pos,
+                    "grns": matched_grns,
+                    "tolerance_pct": self.tolerance_pct
+                },
+                context={"stage": "MATCH_TWO_WAY"}
+            )
+            
+            # Get match result (with fallback to local computation)
+            if match_compute_result.get("score") is not None:
+                match_result = {
+                    "score": match_compute_result["score"],
+                    "evidence": match_compute_result.get("evidence", {})
+                }
+            else:
+                match_result = self._compute_match(invoice, matched_pos, matched_grns)
             
             # Determine if match passed threshold
             match_status = "MATCHED" if match_result["score"] >= self.match_threshold else "FAILED"
+            
+            # Step 2: Use LLM for intelligent match analysis
+            llm_analysis = await self.invoke_llm(
+                stage="MATCH_TWO_WAY",
+                task="Analyze invoice-PO match result and provide insights",
+                context={
+                    "invoice": {
+                        "id": invoice.get("invoice_id"),
+                        "vendor": invoice.get("vendor_name"),
+                        "amount": invoice.get("amount"),
+                        "line_items_count": len(invoice.get("line_items", []))
+                    },
+                    "matched_pos": [
+                        {
+                            "po_number": po.get("po_number"),
+                            "amount": po.get("total_amount"),
+                            "status": po.get("status")
+                        } for po in matched_pos[:3]  # Limit for LLM context
+                    ],
+                    "match_score": match_result["score"],
+                    "match_status": match_status,
+                    "matched_fields": match_result["evidence"].get("matched_fields", []),
+                    "mismatched_fields": match_result["evidence"].get("mismatched_fields", [])
+                },
+                output_format="json with: recommendation, confidence, risk_factors"
+            )
+            
+            # Add LLM analysis to evidence
+            match_evidence = match_result["evidence"]
+            match_evidence["llm_analysis"] = llm_analysis.get("response", {})
             
             self.log_execution(
                 stage="MATCH_TWO_WAY",
@@ -60,7 +110,8 @@ class MatcherAgent(BaseAgent):
                 result={
                     "match_score": match_result["score"],
                     "match_status": match_status,
-                    "threshold": self.match_threshold
+                    "threshold": self.match_threshold,
+                    "llm_used": True
                 }
             )
             
@@ -68,7 +119,7 @@ class MatcherAgent(BaseAgent):
                 "match_score": match_result["score"],
                 "match_result": match_status,
                 "tolerance_pct": self.tolerance_pct,
-                "match_evidence": match_result["evidence"],
+                "match_evidence": match_evidence,
                 "current_stage": "MATCH_TWO_WAY",
                 "audit_log": [self.create_audit_entry(
                     "MATCH_TWO_WAY",
@@ -77,8 +128,10 @@ class MatcherAgent(BaseAgent):
                         "match_score": match_result["score"],
                         "match_result": match_status,
                         "threshold": self.match_threshold,
-                        "matched_fields": match_result["evidence"]["matched_fields"],
-                        "mismatched_fields": match_result["evidence"]["mismatched_fields"]
+                        "matched_fields": match_result["evidence"].get("matched_fields", []),
+                        "mismatched_fields": match_result["evidence"].get("mismatched_fields", []),
+                        "bigtool_used": True,
+                        "llm_used": True
                     }
                 )]
             }

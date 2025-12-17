@@ -13,6 +13,7 @@ class ReconcileAgent(BaseAgent):
     
     Builds accounting entries and reconciliation report.
     Uses COMMON server for accounting logic.
+    Uses LLM for intelligent entry generation.
     """
     
     def __init__(self, config: dict = None):
@@ -32,7 +33,8 @@ class ReconcileAgent(BaseAgent):
         """
         Execute RECONCILE stage.
         
-        - Builds accounting entries (debit/credit)
+        - Builds accounting entries via COMMON server
+        - Uses LLM for intelligent entry categorization
         - Creates reconciliation report
         
         Returns:
@@ -45,20 +47,55 @@ class ReconcileAgent(BaseAgent):
             vendor = state.get("vendor_profile", {})
             normalized = state.get("normalized_invoice", {})
             
-            # Build accounting entries
-            accounting_entries = self._build_accounting_entries(invoice, vendor)
+            # Step 1: Call COMMON server for entry building
+            entries_result = await self.execute_with_bigtool(
+                capability="accounting",
+                params={
+                    "action": "build_entries",
+                    "invoice": invoice,
+                    "vendor": vendor,
+                    "normalized": normalized,
+                    "line_items": invoice.get("line_items", [])
+                },
+                context={"stage": "RECONCILE"}
+            )
+            
+            # Get entries (with fallback to local generation)
+            accounting_entries = entries_result.get("entries") or self._build_accounting_entries(invoice, vendor)
+            
+            # Step 2: Use LLM for intelligent entry categorization
+            llm_result = await self.invoke_llm(
+                stage="RECONCILE",
+                task="Analyze accounting entries and suggest optimal categorization",
+                context={
+                    "invoice": {
+                        "id": invoice.get("invoice_id"),
+                        "vendor": vendor.get("normalized_name"),
+                        "amount": invoice.get("amount"),
+                        "line_items": invoice.get("line_items", [])[:5]  # Limit for context
+                    },
+                    "entries": accounting_entries,
+                    "vendor_industry": vendor.get("enrichment_meta", {}).get("industry")
+                },
+                output_format="json with: suggested_accounts, categorization_notes"
+            )
             
             # Create reconciliation report
             reconciliation_report = self._create_reconciliation_report(
                 invoice, vendor, accounting_entries
             )
             
+            # Add LLM suggestions to report
+            if llm_result.get("response"):
+                reconciliation_report["llm_suggestions"] = llm_result["response"]
+            
             self.log_execution(
                 stage="RECONCILE",
                 action="build_entries",
                 result={
                     "entries_count": len(accounting_entries),
-                    "total_amount": invoice.get("amount", 0)
+                    "total_amount": invoice.get("amount", 0),
+                    "llm_used": True
                 }
             )
             
@@ -79,7 +116,9 @@ class ReconcileAgent(BaseAgent):
                         "total_credit": sum(
                             e.get("amount", 0) for e in accounting_entries 
                             if e.get("type") == "CREDIT"
-                        )
+                        ),
+                        "bigtool_used": True,
+                        "llm_used": True
                     }
                 )]
             }

@@ -31,18 +31,35 @@ class BigtoolPicker:
     
     # Mapping capabilities to MCP tools
     CAPABILITY_TO_MCP_TOOL = {
+        # OCR and parsing
         "ocr": "extract_ocr",
-        "enrichment": "enrich_vendor",
-        "erp_connector": "post_to_erp",
-        "db": "persist_invoice",
-        "email": "send_notification",
-        "validation": "validate_invoice_schema",
         "parsing": "parse_line_items",
-        "normalization": "normalize_vendor",
+        
+        # Enrichment and normalization
+        "enrichment": "enrich_vendor",
+        "normalize": "normalize_vendor",
+        
+        # ERP operations
+        "erp_connector": "fetch_po_data",
         "po_data": "fetch_po_data",
         "grn_data": "fetch_grn_data",
-        "payment": "schedule_payment",
+        
+        # Storage and database
+        "storage": "persist_invoice",
+        "db": "persist_audit",
+        "validation": "validate_invoice_schema",
+        
+        # Email and notifications
+        "email": "send_notification",
+        
+        # Accounting and policy
+        "accounting": "build_entries",
+        "policy": "apply_policy",
+        "matching": "compute_match",
+        
+        # Checkpoint operations
         "checkpoint": "create_checkpoint",
+        "payment": "schedule_payment",
     }
     
     # Simulated tool availability (in production: real health checks)

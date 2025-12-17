@@ -5,10 +5,23 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 const API = 'http://localhost:8000';
 
 // Types
+export interface LineItem {
+  desc: string;
+  qty: number;
+  unit_price: number;
+  total: number;
+}
+
 export interface Invoice {
+  invoice_id: string;
   vendor_name: string;
+  vendor_tax_id?: string;
+  invoice_date: string;
+  due_date: string;
   amount: number;
   currency: string;
+  line_items: LineItem[];
+  attachments?: string[];
   po_number?: string;
 }
 
@@ -52,19 +65,19 @@ export function useWorkflow() {
     addLog('SUBMIT', `Submitting invoice for ${invoice.vendor_name}`, 'info');
 
     try {
-      const res = await fetch(`${API}/api/v1/invoices`, {
+      const res = await fetch(`${API}/invoice/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(invoice),
       });
       const data = await res.json();
       
-      if (data.workflow_id) {
-        setState((s: WorkflowState) => ({ ...s, workflowId: data.workflow_id }));
-        addLog('SUBMIT', `Workflow started: ${data.workflow_id}`, 'success');
-        pollStatus(data.workflow_id);
+      if (data.thread_id) {
+        setState((s: WorkflowState) => ({ ...s, workflowId: data.thread_id }));
+        addLog('SUBMIT', `Workflow started: ${data.thread_id}`, 'success');
+        pollStatus(data.thread_id);
       } else {
-        throw new Error(data.detail || 'Failed to start workflow');
+        throw new Error(data.detail || data.message || 'Failed to start workflow');
       }
     } catch (err) {
       addLog('ERROR', String(err), 'error');
@@ -77,7 +90,7 @@ export function useWorkflow() {
   const pollStatus = useCallback(async (wfId: string) => {
     const poll = async () => {
       try {
-        const res = await fetch(`${API}/api/v1/workflow/${wfId}/status`);
+        const res = await fetch(`${API}/workflow/status/${wfId}`);
         const data = await res.json();
         
         setState((s: WorkflowState) => {
@@ -94,18 +107,21 @@ export function useWorkflow() {
           return { ...s, currentStage: data.current_stage || s.currentStage };
         });
 
-        // Check for HITL
-        if (data.hitl_required || data.status === 'interrupted') {
+        // Check for HITL (using backend response format)
+        if (data.requires_human_review || data.status === 'PAUSED') {
           setState((s: WorkflowState) => ({
             ...s,
             status: 'hitl',
-            hitlData: { reason: data.hitl_reason || 'Manual review required', checkpoint_id: data.hitl_checkpoint_id },
+            hitlData: { 
+              reason: data.match_result || 'Manual review required', 
+              checkpoint_id: data.checkpoint_id 
+            },
           }));
           return;
         }
 
         // Check completion
-        if (data.status === 'completed' || data.current_stage === 'COMPLETE') {
+        if (data.status === 'COMPLETED' || data.current_stage === 'COMPLETE') {
           setState((s: WorkflowState) => ({ ...s, status: 'done' }));
           addLog('COMPLETE', 'Workflow completed successfully!', 'success');
           return;
@@ -121,14 +137,20 @@ export function useWorkflow() {
   }, [addLog]);
 
   const resolveHitl = useCallback(async (approved: boolean) => {
-    if (!state.hitlData?.checkpoint_id) return;
+    if (!state.hitlData?.checkpoint_id || !state.workflowId) return;
     setLoading(true);
     
     try {
-      const res = await fetch(`${API}/api/v1/human-review/${state.hitlData.checkpoint_id}/resolve`, {
+      const res = await fetch(`${API}/human-review/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved, decision: approved ? 'approve' : 'reject' }),
+        body: JSON.stringify({ 
+          thread_id: state.workflowId,
+          checkpoint_id: state.hitlData.checkpoint_id,
+          decision: approved ? 'ACCEPT' : 'REJECT',
+          notes: approved ? 'Approved via UI' : 'Rejected via UI',
+          reviewer_id: 'frontend-user'
+        }),
       });
       
       if (res.ok) {

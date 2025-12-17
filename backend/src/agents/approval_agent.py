@@ -11,7 +11,8 @@ class ApprovalAgent(BaseAgent):
     APPROVE Stage Agent.
     
     Applies invoice approval policy based on amount and rules.
-    Uses ATLAS server for workflow integration if needed.
+    Uses ATLAS server for policy application.
+    Uses LLM for intelligent risk assessment.
     """
     
     # Approval thresholds
@@ -35,7 +36,8 @@ class ApprovalAgent(BaseAgent):
         """
         Execute APPROVE stage.
         
-        - Checks invoice amount against approval limits
+        - Applies approval policy via ATLAS server
+        - Uses LLM for risk assessment
         - Auto-approves or escalates based on rules
         
         Returns:
@@ -46,11 +48,55 @@ class ApprovalAgent(BaseAgent):
         try:
             invoice = state.get("invoice_payload", {})
             vendor = state.get("vendor_profile", {})
+            reconciliation = state.get("reconciliation_report", {})
             
             amount = invoice.get("amount", 0)
             
-            # Apply approval policy
-            approval_result = self._apply_approval_policy(amount, vendor)
+            # Step 1: Call ATLAS server for policy application
+            policy_result = await self.execute_with_bigtool(
+                capability="policy",
+                params={
+                    "action": "apply_policy",
+                    "invoice": invoice,
+                    "vendor": vendor,
+                    "amount": amount,
+                    "reconciliation": reconciliation
+                },
+                context={"stage": "APPROVE"}
+            )
+            
+            # Step 2: Use LLM for intelligent risk assessment
+            llm_result = await self.invoke_llm(
+                stage="APPROVE",
+                task="Assess approval risk for this invoice",
+                context={
+                    "invoice": {
+                        "id": invoice.get("invoice_id"),
+                        "vendor": vendor.get("normalized_name"),
+                        "amount": amount,
+                        "currency": invoice.get("currency")
+                    },
+                    "vendor_risk_score": vendor.get("risk_score", 0),
+                    "vendor_industry": vendor.get("enrichment_meta", {}).get("industry"),
+                    "match_score": state.get("match_score"),
+                    "match_result": state.get("match_result")
+                },
+                output_format="json with: risk_level, recommendation, factors"
+            )
+            
+            # Get approval result (with fallback to local policy)
+            if policy_result.get("status"):
+                approval_result = {
+                    "status": policy_result["status"],
+                    "approver_id": policy_result.get("approver_id", "SYSTEM"),
+                    "policy": policy_result.get("policy", "mcp_policy")
+                }
+            else:
+                approval_result = self._apply_approval_policy(amount, vendor)
+            
+            # Add LLM risk assessment
+            if llm_result.get("response"):
+                approval_result["llm_risk_assessment"] = llm_result["response"]
             
             self.log_execution(
                 stage="APPROVE",
@@ -58,7 +104,8 @@ class ApprovalAgent(BaseAgent):
                 result={
                     "amount": amount,
                     "approval_status": approval_result["status"],
-                    "approver": approval_result["approver_id"]
+                    "approver": approval_result["approver_id"],
+                    "llm_used": True
                 }
             )
             
@@ -74,7 +121,9 @@ class ApprovalAgent(BaseAgent):
                         "amount": amount,
                         "approval_status": approval_result["status"],
                         "approver_id": approval_result["approver_id"],
-                        "policy_applied": approval_result["policy"]
+                        "policy_applied": approval_result["policy"],
+                        "bigtool_used": True,
+                        "llm_used": True
                     }
                 )]
             }

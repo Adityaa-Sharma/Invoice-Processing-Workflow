@@ -14,7 +14,7 @@ class IngestAgent(BaseAgent):
     
     Validates payload schema and persists raw invoice data.
     Uses COMMON server for validation and storage.
-    Uses Bigtool to select storage provider.
+    Uses BigtoolPicker to select storage provider.
     """
     
     def __init__(self, config: dict = None):
@@ -31,8 +31,9 @@ class IngestAgent(BaseAgent):
         """
         Execute INTAKE stage.
         
-        - Validates invoice payload schema
-        - Persists raw invoice (mock)
+        - Uses BigtoolPicker to select storage provider
+        - Validates invoice payload schema via COMMON server
+        - Persists raw invoice via MCP storage tool
         - Generates raw_id and timestamp
         
         Returns:
@@ -43,8 +44,38 @@ class IngestAgent(BaseAgent):
         try:
             invoice = state.get("invoice_payload", {})
             
-            # Validate schema
-            is_valid = validate_invoice_payload(invoice)
+            # Step 1: Use BigtoolPicker to select storage tool
+            tool_selection = await self.select_tool(
+                capability="storage",
+                context={
+                    "invoice_id": invoice.get("invoice_id"),
+                    "has_attachments": bool(invoice.get("attachments")),
+                    "data_size": len(str(invoice)),
+                },
+                use_llm=True
+            )
+            
+            bigtool_selection = {
+                "INTAKE": {
+                    "capability": "storage",
+                    "selected_tool": tool_selection.get("selected_tool", "local_fs"),
+                    "pool": tool_selection.get("pool", ["s3", "gcs", "local_fs"]),
+                    "reason": tool_selection.get("reason", "BigtoolPicker selection")
+                }
+            }
+            
+            # Step 2: Validate schema via COMMON server
+            validation_result = await self.execute_with_bigtool(
+                capability="validation",
+                params={
+                    "invoice": invoice,
+                    "schema_type": "invoice_payload"
+                },
+                context={"stage": "INTAKE"}
+            )
+            
+            # Check validation (with fallback to local validation)
+            is_valid = validation_result.get("valid", validate_invoice_payload(invoice))
             
             if not is_valid:
                 self.logger.warning("Invoice payload validation failed")
@@ -52,32 +83,38 @@ class IngestAgent(BaseAgent):
                     "validated": False,
                     "current_stage": "INTAKE",
                     "status": "FAILED",
-                    "error": "Invalid invoice payload schema",
+                    "error": validation_result.get("error", "Invalid invoice payload schema"),
                     "audit_log": [self.create_audit_entry(
                         "INTAKE",
                         "validation_failed",
-                        {"reason": "Invalid schema"}
+                        {"reason": validation_result.get("errors", ["Invalid schema"])}
                     )]
                 }
             
-            # Generate raw_id (simulating storage)
-            raw_id = f"RAW-{uuid4().hex[:12].upper()}"
+            # Step 3: Persist invoice via storage tool
             ingest_ts = datetime.now(timezone.utc).isoformat()
             
-            # Mock bigtool selection for storage
-            bigtool_selection = {
-                "INTAKE": {
-                    "capability": "storage",
-                    "selected_tool": "local_fs",
-                    "pool": ["s3", "gcs", "local_fs"],
-                    "reason": "local_fs available and fastest for demo"
-                }
-            }
+            storage_result = await self.execute_with_bigtool(
+                capability="storage",
+                params={
+                    "action": "persist_invoice",
+                    "invoice": invoice,
+                    "timestamp": ingest_ts
+                },
+                context={"stage": "INTAKE"}
+            )
+            
+            # Get raw_id from storage (with fallback to generated ID)
+            raw_id = storage_result.get("raw_id") or f"RAW-{uuid4().hex[:12].upper()}"
             
             self.log_execution(
                 stage="INTAKE",
                 action="ingest_invoice",
-                result={"raw_id": raw_id, "validated": True},
+                result={
+                    "raw_id": raw_id,
+                    "validated": True,
+                    "storage_tool": tool_selection.get("selected_tool")
+                },
                 bigtool_selection=bigtool_selection["INTAKE"]
             )
             
@@ -93,7 +130,8 @@ class IngestAgent(BaseAgent):
                     {
                         "raw_id": raw_id,
                         "invoice_id": invoice.get("invoice_id"),
-                        "tool": "local_fs"
+                        "tool": tool_selection.get("selected_tool", "local_fs"),
+                        "bigtool_used": True
                     }
                 )]
             }

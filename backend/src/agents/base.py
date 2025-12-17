@@ -1,7 +1,9 @@
 """Base agent class for all workflow agents."""
 from abc import ABC, abstractmethod
-from typing import Any, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from ..utils.logger import get_logger, create_audit_entry
+from ..tools.bigtool_picker import BigtoolPicker
+from ..services.llm_service import invoke_agent, select_tool_with_reasoning
 
 if TYPE_CHECKING:
     from ..graph.state import InvoiceWorkflowState
@@ -13,6 +15,11 @@ class BaseAgent(ABC):
     
     Provides common functionality and enforces interface for
     all stage-specific agents in the invoice processing workflow.
+    
+    Features:
+    - BigtoolPicker integration for dynamic tool selection
+    - LLM integration for intelligent processing
+    - MCP server routing via BigtoolPicker
     """
     
     def __init__(self, name: str, config: dict = None):
@@ -26,6 +33,95 @@ class BaseAgent(ABC):
         self.name = name
         self.config = config or {}
         self.logger = get_logger(f"agent.{name.lower()}")
+        self._bigtool: Optional[BigtoolPicker] = None
+    
+    @property
+    def bigtool(self) -> BigtoolPicker:
+        """Get BigtoolPicker instance (singleton)."""
+        if self._bigtool is None:
+            self._bigtool = BigtoolPicker()
+        return self._bigtool
+    
+    async def execute_with_bigtool(
+        self,
+        capability: str,
+        params: dict[str, Any] = None,
+        context: dict = None
+    ) -> dict[str, Any]:
+        """
+        Execute a capability via BigtoolPicker -> MCP server.
+        
+        This routes the request through:
+        1. BigtoolPicker (selects best tool from pool)
+        2. MCPClient (routes to COMMON or ATLAS server)
+        3. MCP Server (executes the tool)
+        
+        Args:
+            capability: Required capability (e.g., "ocr", "enrichment")
+            params: Parameters for the tool
+            context: Context for tool selection
+            
+        Returns:
+            dict with execution result
+        """
+        self.logger.info(f"Executing capability via Bigtool: {capability}")
+        result = await self.bigtool.execute(capability, params, context)
+        return result
+    
+    async def select_tool(
+        self,
+        capability: str,
+        context: dict = None,
+        use_llm: bool = True
+    ) -> dict[str, Any]:
+        """
+        Select best tool for a capability.
+        
+        Can use LLM for intelligent selection or fallback to
+        BigtoolPicker's priority-based selection.
+        
+        Args:
+            capability: Required capability
+            context: Context for selection
+            use_llm: Whether to use LLM for selection
+            
+        Returns:
+            dict with selected tool and reasoning
+        """
+        pool = self.bigtool.POOLS.get(capability, [])
+        
+        if use_llm and pool:
+            # Use LLM for intelligent tool selection
+            result = await select_tool_with_reasoning(
+                capability=capability,
+                pool=pool,
+                context=context or {}
+            )
+            return result
+        else:
+            # Use BigtoolPicker's priority-based selection
+            return self.bigtool.select(capability, context)
+    
+    async def invoke_llm(
+        self,
+        stage: str,
+        task: str,
+        context: dict[str, Any],
+        output_format: str = None
+    ) -> dict[str, Any]:
+        """
+        Invoke LLM for intelligent processing.
+        
+        Args:
+            stage: Current workflow stage
+            task: Task description
+            context: Context data
+            output_format: Expected output format
+            
+        Returns:
+            dict with LLM response
+        """
+        return await invoke_agent(stage, task, context, output_format)
     
     @abstractmethod
     async def execute(self, state: "InvoiceWorkflowState") -> dict[str, Any]:

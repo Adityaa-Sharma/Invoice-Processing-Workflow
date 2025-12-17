@@ -22,10 +22,13 @@ TOOL_SERVER_MAP = {
     # COMMON server tools (internal operations)
     "validate_invoice_schema": "common",
     "persist_invoice": "common",
+    "persist_audit": "common",
     "parse_line_items": "common",
     "normalize_vendor": "common",
     "create_checkpoint": "common",
     "get_checkpoint": "common",
+    "compute_match": "common",
+    "build_entries": "common",
     
     # ATLAS server tools (external operations)
     "extract_ocr": "atlas",
@@ -35,6 +38,7 @@ TOOL_SERVER_MAP = {
     "post_to_erp": "atlas",
     "schedule_payment": "atlas",
     "send_notification": "atlas",
+    "apply_policy": "atlas",
 }
 
 

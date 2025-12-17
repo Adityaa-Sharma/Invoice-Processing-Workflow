@@ -11,7 +11,7 @@ class ErpFetchAgent(BaseAgent):
     
     Fetches POs, GRNs, and historical invoices from ERP systems.
     Uses ATLAS server for ERP connections.
-    Uses Bigtool to select ERP connector.
+    Uses BigtoolPicker to select ERP connector.
     """
     
     def __init__(self, config: dict = None):
@@ -31,8 +31,9 @@ class ErpFetchAgent(BaseAgent):
         """
         Execute RETRIEVE stage.
         
-        - Fetches Purchase Orders matching invoice
-        - Fetches Goods Received Notes
+        - Uses BigtoolPicker to select ERP connector
+        - Fetches Purchase Orders via ATLAS MCP server
+        - Fetches Goods Received Notes via ATLAS MCP server
         - Fetches historical invoices for vendor
         
         Returns:
@@ -45,23 +46,67 @@ class ErpFetchAgent(BaseAgent):
             parsed = state.get("parsed_invoice", {})
             vendor = state.get("vendor_profile", {})
             
-            # Mock bigtool selection for ERP connector
+            # Step 1: Use BigtoolPicker to select ERP connector
+            tool_selection = await self.select_tool(
+                capability="erp_connector",
+                context={
+                    "vendor_name": vendor.get("normalized_name"),
+                    "po_references": parsed.get("detected_pos", []),
+                    "invoice_amount": invoice.get("amount"),
+                },
+                use_llm=True
+            )
+            
             bigtool_selection = {
                 "RETRIEVE": {
                     "capability": "erp_connector",
-                    "selected_tool": "mock_erp",
-                    "pool": ["sap_sandbox", "netsuite", "mock_erp"],
-                    "reason": "mock_erp available for demo environment"
+                    "selected_tool": tool_selection.get("selected_tool", "mock_erp"),
+                    "pool": tool_selection.get("pool", ["sap_sandbox", "netsuite", "mock_erp"]),
+                    "reason": tool_selection.get("reason", "BigtoolPicker selection")
                 }
             }
             
             # Get PO references from parsed invoice
             po_refs = parsed.get("detected_pos", [])
             
-            # Mock ERP data fetch
-            matched_pos = self._fetch_purchase_orders(po_refs, invoice)
-            matched_grns = self._fetch_grns(matched_pos)
-            history = self._fetch_invoice_history(vendor.get("normalized_name", ""))
+            # Step 2: Fetch POs via ATLAS server
+            po_result = await self.execute_with_bigtool(
+                capability="erp_connector",
+                params={
+                    "action": "fetch_po_data",
+                    "po_references": po_refs,
+                    "vendor_name": vendor.get("normalized_name"),
+                    "invoice_data": invoice
+                },
+                context={"stage": "RETRIEVE"}
+            )
+            
+            # Step 3: Fetch GRNs via ATLAS server
+            grn_result = await self.execute_with_bigtool(
+                capability="erp_connector",
+                params={
+                    "action": "fetch_grn_data",
+                    "po_references": po_refs,
+                    "vendor_name": vendor.get("normalized_name")
+                },
+                context={"stage": "RETRIEVE"}
+            )
+            
+            # Get results with fallback to mock data
+            matched_pos = po_result.get("purchase_orders") or self._fetch_purchase_orders(po_refs, invoice)
+            matched_grns = grn_result.get("grns") or self._fetch_grns(matched_pos)
+            
+            # Step 4: Fetch invoice history
+            history_result = await self.execute_with_bigtool(
+                capability="erp_connector",
+                params={
+                    "action": "fetch_invoice_history",
+                    "vendor_name": vendor.get("normalized_name")
+                },
+                context={"stage": "RETRIEVE"}
+            )
+            
+            history = history_result.get("history") or self._fetch_invoice_history(vendor.get("normalized_name", ""))
             
             self.log_execution(
                 stage="RETRIEVE",
@@ -69,7 +114,8 @@ class ErpFetchAgent(BaseAgent):
                 result={
                     "pos_found": len(matched_pos),
                     "grns_found": len(matched_grns),
-                    "history_count": len(history)
+                    "history_count": len(history),
+                    "erp_tool": tool_selection.get("selected_tool")
                 },
                 bigtool_selection=bigtool_selection["RETRIEVE"]
             )
@@ -84,10 +130,11 @@ class ErpFetchAgent(BaseAgent):
                     "RETRIEVE",
                     "erp_data_fetched",
                     {
-                        "erp_tool": "mock_erp",
+                        "erp_tool": tool_selection.get("selected_tool", "mock_erp"),
                         "pos_found": len(matched_pos),
                         "grns_found": len(matched_grns),
-                        "history_records": len(history)
+                        "history_records": len(history),
+                        "bigtool_used": True
                     }
                 )]
             }

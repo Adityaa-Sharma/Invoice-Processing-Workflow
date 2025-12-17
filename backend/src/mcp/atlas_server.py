@@ -78,7 +78,8 @@ async def list_tools():
         "fetch_grn_data",
         "post_to_erp",
         "schedule_payment",
-        "send_notification"
+        "send_notification",
+        "apply_policy"
     ]
 
 
@@ -394,6 +395,60 @@ async def send_notification(request: ToolRequest):
         success=True,
         tool="send_notification",
         result=result,
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+
+
+@app.post("/tools/apply_policy")
+async def apply_policy(request: ToolRequest):
+    """
+    Apply approval policy to an invoice.
+    
+    Args:
+        invoice: Invoice data
+        vendor: Vendor profile
+        amount: Invoice amount
+    """
+    data = request.model_dump()
+    invoice = data.get("invoice", {})
+    vendor = data.get("vendor", {})
+    amount = data.get("amount", invoice.get("amount", 0))
+    
+    # Policy thresholds
+    AUTO_APPROVE_LIMIT = 10000.0
+    MANAGER_APPROVE_LIMIT = 50000.0
+    
+    risk_score = vendor.get("risk_score", 0) if vendor else 0
+    
+    # Apply policy rules
+    if risk_score > 0.5:
+        status = "APPROVED_WITH_REVIEW"
+        approver_id = "MANAGER-REVIEW"
+        policy = "high_risk_vendor"
+    elif amount <= AUTO_APPROVE_LIMIT:
+        status = "AUTO_APPROVED"
+        approver_id = "SYSTEM"
+        policy = "auto_approve_small_amount"
+    elif amount <= MANAGER_APPROVE_LIMIT:
+        status = "APPROVED"
+        approver_id = "MGR-001"
+        policy = "manager_approval"
+    else:
+        status = "APPROVED"
+        approver_id = "EXEC-001"
+        policy = "executive_approval"
+    
+    return ToolResponse(
+        success=True,
+        tool="apply_policy",
+        result={
+            "status": status,
+            "approver_id": approver_id,
+            "policy": policy,
+            "amount": amount,
+            "risk_score": risk_score,
+            "applied_at": datetime.now(timezone.utc).isoformat()
+        },
         timestamp=datetime.now(timezone.utc).isoformat()
     )
 

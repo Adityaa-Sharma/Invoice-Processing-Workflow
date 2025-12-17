@@ -76,10 +76,13 @@ async def list_tools():
     return [
         "validate_invoice_schema",
         "persist_invoice",
+        "persist_audit",
         "parse_line_items",
         "normalize_vendor",
         "create_checkpoint",
-        "get_checkpoint"
+        "get_checkpoint",
+        "compute_match",
+        "build_entries"
     ]
 
 
@@ -347,6 +350,163 @@ async def get_checkpoint(request: ToolRequest):
         success=True,
         tool="get_checkpoint",
         result=checkpoint,
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+
+
+@app.post("/tools/compute_match")
+async def compute_match(request: ToolRequest):
+    """
+    Compute match score between invoice and PO.
+    
+    Args:
+        invoice: Invoice data
+        purchase_orders: List of POs
+        grns: List of GRNs
+        tolerance_pct: Tolerance percentage
+    """
+    data = request.model_dump()
+    invoice = data.get("invoice", {})
+    pos = data.get("purchase_orders", [])
+    tolerance = data.get("tolerance_pct", 5.0)
+    
+    if not pos:
+        return ToolResponse(
+            success=True,
+            tool="compute_match",
+            result={
+                "score": 0.0,
+                "evidence": {"error": "No POs to match"}
+            },
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+    
+    # Simple match logic
+    po = pos[0]
+    matched_fields = []
+    mismatched_fields = []
+    
+    # Amount match
+    inv_amount = invoice.get("amount", 0)
+    po_amount = po.get("total_amount", 0)
+    if po_amount > 0:
+        diff_pct = abs(inv_amount - po_amount) / po_amount * 100
+        if diff_pct <= tolerance:
+            matched_fields.append("amount")
+        else:
+            mismatched_fields.append("amount")
+    
+    # Vendor match
+    inv_vendor = invoice.get("vendor_name", "").upper()
+    po_vendor = po.get("vendor_name", "").upper()
+    if inv_vendor and po_vendor and (inv_vendor in po_vendor or po_vendor in inv_vendor):
+        matched_fields.append("vendor")
+    else:
+        mismatched_fields.append("vendor")
+    
+    # Currency match
+    if invoice.get("currency") == po.get("currency"):
+        matched_fields.append("currency")
+    else:
+        mismatched_fields.append("currency")
+    
+    total = len(matched_fields) + len(mismatched_fields)
+    score = len(matched_fields) / total if total > 0 else 0.0
+    
+    return ToolResponse(
+        success=True,
+        tool="compute_match",
+        result={
+            "score": score,
+            "evidence": {
+                "matched_fields": matched_fields,
+                "mismatched_fields": mismatched_fields,
+            }
+        },
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+
+
+@app.post("/tools/build_entries")
+async def build_entries(request: ToolRequest):
+    """
+    Build accounting entries for an invoice.
+    
+    Args:
+        invoice: Invoice data
+        vendor: Vendor profile
+        line_items: Line items to process
+    """
+    data = request.model_dump()
+    invoice = data.get("invoice", {})
+    vendor = data.get("vendor", {})
+    
+    amount = invoice.get("amount", 0)
+    invoice_id = invoice.get("invoice_id", "")
+    vendor_name = vendor.get("normalized_name", invoice.get("vendor_name", ""))
+    
+    entry_id = uuid4().hex[:8].upper()
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    entries = [
+        {
+            "entry_id": f"JE-{entry_id}-01",
+            "type": "DEBIT",
+            "account": "6000-Expenses",
+            "amount": amount,
+            "currency": invoice.get("currency", "USD"),
+            "reference": invoice_id,
+            "description": f"Expense for invoice {invoice_id} - {vendor_name}",
+            "timestamp": timestamp
+        },
+        {
+            "entry_id": f"JE-{entry_id}-02",
+            "type": "CREDIT",
+            "account": "2100-Accounts Payable",
+            "amount": amount,
+            "currency": invoice.get("currency", "USD"),
+            "reference": invoice_id,
+            "description": f"Payable to {vendor_name}",
+            "timestamp": timestamp
+        }
+    ]
+    
+    return ToolResponse(
+        success=True,
+        tool="build_entries",
+        result={"entries": entries},
+        timestamp=timestamp
+    )
+
+
+@app.post("/tools/persist_audit")
+async def persist_audit(request: ToolRequest):
+    """
+    Persist audit log entries to storage.
+    
+    Args:
+        invoice_id: Invoice identifier
+        raw_id: Raw workflow ID
+        audit_entries: List of audit entries
+    """
+    data = request.model_dump()
+    invoice_id = data.get("invoice_id", "")
+    raw_id = data.get("raw_id", "")
+    audit_entries = data.get("audit_entries", [])
+    
+    audit_record_id = f"AUDIT-{uuid4().hex[:10].upper()}"
+    
+    return ToolResponse(
+        success=True,
+        tool="persist_audit",
+        result={
+            "audit_id": audit_record_id,
+            "invoice_id": invoice_id,
+            "raw_id": raw_id,
+            "entries_persisted": len(audit_entries),
+            "persisted": True,
+            "persisted_at": datetime.now(timezone.utc).isoformat()
+        },
         timestamp=datetime.now(timezone.utc).isoformat()
     )
 

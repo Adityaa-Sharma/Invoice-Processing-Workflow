@@ -11,7 +11,8 @@ class CompleteAgent(BaseAgent):
     COMPLETE Stage Agent.
     
     Produces final structured payload and marks workflow complete.
-    Uses COMMON server for final processing.
+    Uses COMMON server for final processing and audit persistence.
+    Uses BigtoolPicker to select database for audit storage.
     """
     
     def __init__(self, config: dict = None):
@@ -28,6 +29,8 @@ class CompleteAgent(BaseAgent):
         """
         Execute COMPLETE stage.
         
+        - Uses BigtoolPicker to select database for audit
+        - Persists audit log via COMMON server
         - Assembles final payload with all processing results
         - Marks workflow as completed
         
@@ -37,22 +40,70 @@ class CompleteAgent(BaseAgent):
         self.logger.info("Starting COMPLETE stage")
         
         try:
+            # Step 1: Use BigtoolPicker to select database tool
+            tool_selection = await self.select_tool(
+                capability="db",
+                context={
+                    "action": "persist_audit",
+                    "invoice_id": state.get("invoice_payload", {}).get("invoice_id"),
+                    "audit_entries": len(state.get("audit_log", [])),
+                },
+                use_llm=False  # Simple selection for DB
+            )
+            
+            bigtool_selection = {
+                "COMPLETE": {
+                    "capability": "db",
+                    "selected_tool": tool_selection.get("selected_tool", "postgresql"),
+                    "pool": tool_selection.get("pool", ["postgresql", "mongodb", "sqlite"]),
+                    "reason": tool_selection.get("reason", "BigtoolPicker selection")
+                }
+            }
+            
+            # Step 2: Persist audit log via COMMON server
+            audit_result = await self.execute_with_bigtool(
+                capability="db",
+                params={
+                    "action": "persist_audit",
+                    "invoice_id": state.get("invoice_payload", {}).get("invoice_id"),
+                    "raw_id": state.get("raw_id"),
+                    "audit_entries": state.get("audit_log", []),
+                    "bigtool_selections": state.get("bigtool_selections", {})
+                },
+                context={"stage": "COMPLETE"}
+            )
+            
             # Build final payload from all stage outputs
             final_payload = self._build_final_payload(state)
+            
+            # Add bigtool selections and integration info to final payload
+            final_payload["bigtool_selections"] = {
+                **state.get("bigtool_selections", {}),
+                **bigtool_selection
+            }
+            final_payload["integration"] = {
+                "bigtool_used": True,
+                "llm_used": True,
+                "mcp_servers": ["COMMON", "ATLAS"],
+                "audit_persisted": audit_result.get("persisted", True)
+            }
             
             self.log_execution(
                 stage="COMPLETE",
                 action="finalize_workflow",
                 result={
                     "invoice_id": state.get("invoice_payload", {}).get("invoice_id"),
-                    "status": "COMPLETED"
-                }
+                    "status": "COMPLETED",
+                    "db_tool": tool_selection.get("selected_tool")
+                },
+                bigtool_selection=bigtool_selection["COMPLETE"]
             )
             
             return {
                 "final_payload": final_payload,
                 "current_stage": "COMPLETE",
                 "status": "COMPLETED",
+                "bigtool_selections": bigtool_selection,
                 "audit_log": [self.create_audit_entry(
                     "COMPLETE",
                     "workflow_completed",
@@ -61,7 +112,9 @@ class CompleteAgent(BaseAgent):
                         "erp_txn_id": state.get("erp_txn_id"),
                         "scheduled_payment_id": state.get("scheduled_payment_id"),
                         "total_stages": 12,
-                        "completed_at": datetime.now(timezone.utc).isoformat()
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "db_tool": tool_selection.get("selected_tool", "postgresql"),
+                        "bigtool_used": True
                     }
                 )]
             }

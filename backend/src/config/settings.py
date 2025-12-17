@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     
+    # LLM - Gemini
+    GEMINI_API_KEY: Optional[str] = None
+    LLM_MODEL: str = "gemini-2.0-flash"
+    LLM_TEMPERATURE: float = 0.7
+    LLM_MAX_RETRIES: int = 2
+    
+    # MCP Servers
+    COMMON_MCP_URL: str = "http://localhost:8001"
+    ATLAS_MCP_URL: str = "http://localhost:8002"
+    
     # Logging
     LOG_LEVEL: str = "INFO"
     
