@@ -72,6 +72,36 @@ LLM-based tool selection from capability pools:
 | Enrichment | clearbit, pdl, vendor_db |
 | ERP | sap, netsuite, mock_erp |
 
+### Match Score Calculation
+
+The MATCH_TWO_WAY stage uses **weighted scoring** to determine if human review is needed:
+
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| **Total Amount** | 40% | Invoice total vs PO total (within tolerance %) |
+| **Line Quantities** | 35% | Each line item qty matches PO |
+| **Unit Prices** | 25% | Each line item price matches PO |
+
+```
+Final Score = (Amount × 0.40) + (Quantity × 0.35) + (Price × 0.25)
+
+Example:
+┌─────────────────────────────────────────┐
+│ Invoice: $15,000 | PO: $15,000          │
+│ Amount:   0% diff  → Score 1.0    (40%) │
+│ Quantity: 2/2 match → Score 1.0   (35%) │
+│ Price:    2/2 match → Score 1.0   (25%) │
+│ ─────────────────────────────────────── │
+│ Final: 0.40 + 0.35 + 0.25 = 1.00        │
+│ Threshold: 0.90                         │
+│ 1.00 ≥ 0.90 → ✅ MATCHED (continue)     │
+└─────────────────────────────────────────┘
+
+If score < threshold → CHECKPOINT_HITL (human review)
+```
+
+**Note:** Vendor name is NOT checked in matching - already validated when fetching PO in RETRIEVE stage.
+
 ## API Endpoints
 
 ```bash
