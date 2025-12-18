@@ -12,9 +12,9 @@ Run: uvicorn src.mcp.common_server:app --port 8001
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
 from uuid import uuid4
 import re
 
@@ -42,18 +42,180 @@ _checkpoints: dict[str, dict] = {}
 # Request/Response Models
 # ============================================================================
 
-class ToolRequest(BaseModel):
-    """Generic tool request."""
-    class Config:
-        extra = "allow"
-
-
 class ToolResponse(BaseModel):
     """Generic tool response."""
     success: bool
     tool: str
     result: dict[str, Any]
     timestamp: str
+
+
+# --- Validate Invoice Schema ---
+class ValidateInvoiceSchemaRequest(BaseModel):
+    """Request model for validate_invoice_schema tool."""
+    invoice: Dict[str, Any] = Field(..., description="Invoice data to validate")
+    schema_type: Optional[str] = Field("invoice", description="Type of schema to validate against")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice": {
+                    "invoice_id": "INV-001",
+                    "vendor_name": "Acme Corp",
+                    "amount": 15000.0,
+                    "currency": "USD"
+                },
+                "schema_type": "invoice"
+            }
+        }
+
+
+# --- Persist Invoice ---
+class PersistInvoiceRequest(BaseModel):
+    """Request model for persist_invoice tool."""
+    invoice: Dict[str, Any] = Field(..., description="Invoice data to store")
+    timestamp: Optional[str] = Field(None, description="Ingestion timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice": {"invoice_id": "INV-001", "vendor_name": "Acme Corp", "amount": 15000.0},
+                "timestamp": "2024-01-15T10:30:00Z"
+            }
+        }
+
+
+# --- Parse Line Items ---
+class LineItemInput(BaseModel):
+    """Line item input model."""
+    desc: Optional[str] = Field(None, description="Item description")
+    description: Optional[str] = Field(None, description="Item description (alternate)")
+    qty: Optional[float] = Field(None, description="Quantity")
+    quantity: Optional[float] = Field(None, description="Quantity (alternate)")
+    unit_price: Optional[float] = Field(None, description="Unit price")
+    price: Optional[float] = Field(None, description="Price (alternate)")
+    amount: Optional[float] = Field(None, description="Line amount")
+    total: Optional[float] = Field(None, description="Line total")
+
+    class Config:
+        extra = "allow"
+
+
+class ParseLineItemsRequest(BaseModel):
+    """Request model for parse_line_items tool."""
+    line_items: List[Dict[str, Any]] = Field(default=[], description="List of line item dicts")
+    text: Optional[str] = Field("", description="Raw invoice text to parse")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "line_items": [
+                    {"desc": "Software License", "qty": 5, "unit_price": 1000, "total": 5000},
+                    {"desc": "Support Package", "qty": 1, "unit_price": 2000, "total": 2000}
+                ]
+            }
+        }
+
+
+# --- Normalize Vendor ---
+class NormalizeVendorRequest(BaseModel):
+    """Request model for normalize_vendor tool."""
+    vendor_name: str = Field(..., description="Raw vendor name to normalize")
+    tax_id: Optional[str] = Field(None, description="Optional tax ID for validation")
+    vendor_data: Optional[Dict[str, Any]] = Field(None, description="Additional vendor data")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "vendor_name": "Acme Technologies Inc.",
+                "tax_id": "TAX-123456"
+            }
+        }
+
+
+# --- Create Checkpoint ---
+class CreateCheckpointRequest(BaseModel):
+    """Request model for create_checkpoint tool."""
+    thread_id: str = Field(..., description="Workflow thread identifier")
+    state: Dict[str, Any] = Field(..., description="Current workflow state to checkpoint")
+    reason: Optional[str] = Field("Manual review required", description="Reason for checkpoint")
+    workflow_id: Optional[str] = Field(None, description="Workflow identifier")
+    invoice_id: Optional[str] = Field(None, description="Invoice identifier")
+    required_fields: Optional[List[str]] = Field(None, description="Fields that need review")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "thread_id": "thread-abc123",
+                "state": {"current_stage": "MATCH_TWO_WAY", "match_score": 0.75},
+                "reason": "Match score below threshold"
+            }
+        }
+
+
+# --- Get Checkpoint ---
+class GetCheckpointRequest(BaseModel):
+    """Request model for get_checkpoint tool."""
+    checkpoint_id: str = Field(..., description="Checkpoint identifier to retrieve")
+
+    class Config:
+        json_schema_extra = {
+            "example": {"checkpoint_id": "CP-ABC123DEF456"}
+        }
+
+
+# --- Compute Match ---
+class ComputeMatchRequest(BaseModel):
+    """Request model for compute_match tool."""
+    invoice: Dict[str, Any] = Field(..., description="Invoice data")
+    purchase_orders: List[Dict[str, Any]] = Field(..., description="List of POs to match against")
+    tolerance_pct: Optional[float] = Field(5.0, description="Tolerance percentage for matching")
+    grns: Optional[List[Dict[str, Any]]] = Field(None, description="List of GRNs")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice": {"invoice_id": "INV-001", "amount": 15000, "vendor_name": "Acme Corp"},
+                "purchase_orders": [{"po_number": "PO-001", "total_amount": 15000, "vendor_name": "Acme Corp"}],
+                "tolerance_pct": 5.0
+            }
+        }
+
+
+# --- Build Entries ---
+class BuildEntriesRequest(BaseModel):
+    """Request model for build_entries tool."""
+    invoice: Dict[str, Any] = Field(..., description="Invoice data")
+    vendor: Optional[Dict[str, Any]] = Field(None, description="Vendor profile")
+    account_mapping: Optional[Dict[str, Any]] = Field(None, description="Account code mappings")
+    line_items: Optional[List[Dict[str, Any]]] = Field(None, description="Line items to process")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice": {"invoice_id": "INV-001", "amount": 15000, "currency": "USD", "vendor_name": "Acme Corp"},
+                "vendor": {"normalized_name": "Acme Corporation"}
+            }
+        }
+
+
+# --- Persist Audit ---
+class PersistAuditRequest(BaseModel):
+    """Request model for persist_audit tool."""
+    invoice_id: str = Field(..., description="Invoice identifier")
+    audit_entries: List[Dict[str, Any]] = Field(..., description="List of audit entries to store")
+    raw_id: Optional[str] = Field(None, description="Raw workflow ID")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice_id": "INV-001",
+                "audit_entries": [
+                    {"stage": "INTAKE", "action": "validated", "timestamp": "2024-01-15T10:30:00Z"},
+                    {"stage": "COMPLETE", "action": "finalized", "timestamp": "2024-01-15T10:35:00Z"}
+                ]
+            }
+        }
 
 
 # ============================================================================
@@ -199,32 +361,29 @@ async def list_tools():
 # Tool Endpoints
 # ============================================================================
 
-@app.post("/tools/validate_invoice_schema")
-async def validate_invoice_schema(request: ToolRequest):
+@app.post("/tools/validate_invoice_schema", response_model=ToolResponse)
+async def validate_invoice_schema(request: ValidateInvoiceSchemaRequest):
     """
     Validate invoice payload against schema.
     
-    Args:
-        payload: The data to validate
-        schema_type: Type of schema (default: invoice)
+    Validates that invoice data contains required fields and follows expected format.
     """
-    data = request.model_dump()
-    payload = data.get("payload", data)
-    schema_type = data.get("schema_type", "invoice")
+    invoice = request.invoice
+    schema_type = request.schema_type or "invoice"
     
     errors = []
     
     if schema_type == "invoice":
         required_fields = ["invoice_id", "vendor_name", "amount", "currency"]
         for field in required_fields:
-            if field not in payload or payload.get(field) is None:
+            if field not in invoice or invoice.get(field) is None:
                 errors.append(f"Missing required field: {field}")
         
-        amount = payload.get("amount")
+        amount = invoice.get("amount")
         if amount is not None and amount <= 0:
             errors.append("Amount must be positive")
         
-        currency = payload.get("currency", "")
+        currency = invoice.get("currency", "")
         if currency and len(currency) != 3:
             errors.append("Currency must be 3-letter ISO code")
     
@@ -232,7 +391,7 @@ async def validate_invoice_schema(request: ToolRequest):
         "valid": len(errors) == 0,
         "errors": errors,
         "schema_type": schema_type,
-        "fields_checked": len(payload)
+        "fields_checked": len(invoice)
     }
     
     return ToolResponse(
@@ -243,27 +402,23 @@ async def validate_invoice_schema(request: ToolRequest):
     )
 
 
-@app.post("/tools/persist_invoice")
-async def persist_invoice(request: ToolRequest):
+@app.post("/tools/persist_invoice", response_model=ToolResponse)
+async def persist_invoice(request: PersistInvoiceRequest):
     """
     Persist invoice data to storage.
     
-    Args:
-        payload: Invoice data to persist
-        storage_type: Type of storage (default: database)
+    Stores raw invoice data for audit trail and later retrieval.
     """
-    data = request.model_dump()
-    payload = data.get("payload", data)
-    storage_type = data.get("storage_type", "database")
+    invoice = request.invoice
+    timestamp = request.timestamp or datetime.now(timezone.utc).isoformat()
     
     raw_id = f"RAW-{uuid4().hex[:12].upper()}"
     
     result = {
         "raw_id": raw_id,
-        "storage_type": storage_type,
-        "stored_at": datetime.now(timezone.utc).isoformat(),
-        "payload_size": len(str(payload)),
-        "invoice_id": payload.get("invoice_id"),
+        "stored_at": timestamp,
+        "payload_size": len(str(invoice)),
+        "invoice_id": invoice.get("invoice_id"),
         "persisted": True
     }
     
@@ -275,18 +430,15 @@ async def persist_invoice(request: ToolRequest):
     )
 
 
-@app.post("/tools/parse_line_items")
-async def parse_line_items(request: ToolRequest):
+@app.post("/tools/parse_line_items", response_model=ToolResponse)
+async def parse_line_items(request: ParseLineItemsRequest):
     """
     Parse line items from structured data or text.
     
-    Args:
-        line_items: List of line item dicts
-        text: Raw text to parse
+    Structures line items with GL codes and calculations.
     """
-    data = request.model_dump()
-    line_items = data.get("line_items", [])
-    text = data.get("text", "")
+    line_items = request.line_items
+    text = request.text or ""
     
     parsed_items = []
     
@@ -343,18 +495,15 @@ async def parse_line_items(request: ToolRequest):
     )
 
 
-@app.post("/tools/normalize_vendor")
-async def normalize_vendor(request: ToolRequest):
+@app.post("/tools/normalize_vendor", response_model=ToolResponse)
+async def normalize_vendor(request: NormalizeVendorRequest):
     """
     Normalize vendor name and data.
     
-    Args:
-        vendor_name: Vendor name to normalize
-        vendor_data: Optional additional vendor data
+    Standardizes vendor names for consistent matching and deduplication.
     """
-    data = request.model_dump()
-    vendor_name = data.get("vendor_name", "")
-    vendor_data = data.get("vendor_data", {})
+    vendor_name = request.vendor_name
+    vendor_data = request.vendor_data or {}
     
     # Normalize vendor name
     normalized = vendor_name.strip()
@@ -388,29 +537,23 @@ async def normalize_vendor(request: ToolRequest):
     )
 
 
-@app.post("/tools/create_checkpoint")
-async def create_checkpoint(request: ToolRequest):
+@app.post("/tools/create_checkpoint", response_model=ToolResponse)
+async def create_checkpoint(request: CreateCheckpointRequest):
     """
     Create HITL checkpoint for workflow interruption.
     
-    Args:
-        workflow_id: Workflow identifier
-        invoice_id: Invoice identifier
-        state: Current workflow state
-        reason: Reason for checkpoint
-        required_fields: Fields that need review
+    Creates a checkpoint when human review is required.
     """
-    data = request.model_dump()
-    
     checkpoint_id = f"CP-{uuid4().hex[:12].upper()}"
     
     checkpoint = {
         "checkpoint_id": checkpoint_id,
-        "workflow_id": data.get("workflow_id"),
-        "invoice_id": data.get("invoice_id"),
-        "state": data.get("state", {}),
-        "reason": data.get("reason", "Manual review required"),
-        "required_fields": data.get("required_fields", []),
+        "workflow_id": request.workflow_id or request.thread_id,
+        "thread_id": request.thread_id,
+        "invoice_id": request.invoice_id,
+        "state": request.state,
+        "reason": request.reason,
+        "required_fields": request.required_fields or [],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "pending"
     }
@@ -426,25 +569,14 @@ async def create_checkpoint(request: ToolRequest):
     )
 
 
-@app.post("/tools/get_checkpoint")
-async def get_checkpoint(request: ToolRequest):
+@app.post("/tools/get_checkpoint", response_model=ToolResponse)
+async def get_checkpoint(request: GetCheckpointRequest):
     """
     Retrieve checkpoint by ID.
     
-    Args:
-        checkpoint_id: Checkpoint identifier to retrieve
+    Retrieves a previously created checkpoint for workflow resumption.
     """
-    data = request.model_dump()
-    checkpoint_id = data.get("checkpoint_id")
-    
-    if not checkpoint_id:
-        return ToolResponse(
-            success=False,
-            tool="get_checkpoint",
-            result={"error": "checkpoint_id required"},
-            timestamp=datetime.now(timezone.utc).isoformat()
-        )
-    
+    checkpoint_id = request.checkpoint_id
     checkpoint = _checkpoints.get(checkpoint_id)
     
     if not checkpoint:
@@ -463,21 +595,16 @@ async def get_checkpoint(request: ToolRequest):
     )
 
 
-@app.post("/tools/compute_match")
-async def compute_match(request: ToolRequest):
+@app.post("/tools/compute_match", response_model=ToolResponse)
+async def compute_match(request: ComputeMatchRequest):
     """
     Compute match score between invoice and PO.
     
-    Args:
-        invoice: Invoice data
-        purchase_orders: List of POs
-        grns: List of GRNs
-        tolerance_pct: Tolerance percentage
+    Performs 2-way matching and calculates match score.
     """
-    data = request.model_dump()
-    invoice = data.get("invoice", {})
-    pos = data.get("purchase_orders", [])
-    tolerance = data.get("tolerance_pct", 5.0)
+    invoice = request.invoice
+    pos = request.purchase_orders
+    tolerance = request.tolerance_pct or 5.0
     
     if not pos:
         return ToolResponse(
@@ -536,19 +663,15 @@ async def compute_match(request: ToolRequest):
     )
 
 
-@app.post("/tools/build_entries")
-async def build_entries(request: ToolRequest):
+@app.post("/tools/build_entries", response_model=ToolResponse)
+async def build_entries(request: BuildEntriesRequest):
     """
     Build accounting entries for an invoice.
     
-    Args:
-        invoice: Invoice data
-        vendor: Vendor profile
-        line_items: Line items to process
+    Creates debit/credit journal entries for ERP posting.
     """
-    data = request.model_dump()
-    invoice = data.get("invoice", {})
-    vendor = data.get("vendor", {})
+    invoice = request.invoice
+    vendor = request.vendor or {}
     
     amount = invoice.get("amount", 0)
     invoice_id = invoice.get("invoice_id", "")
@@ -588,20 +711,16 @@ async def build_entries(request: ToolRequest):
     )
 
 
-@app.post("/tools/persist_audit")
-async def persist_audit(request: ToolRequest):
+@app.post("/tools/persist_audit", response_model=ToolResponse)
+async def persist_audit(request: PersistAuditRequest):
     """
     Persist audit log entries to storage.
     
-    Args:
-        invoice_id: Invoice identifier
-        raw_id: Raw workflow ID
-        audit_entries: List of audit entries
+    Stores workflow execution history for compliance and tracking.
     """
-    data = request.model_dump()
-    invoice_id = data.get("invoice_id", "")
-    raw_id = data.get("raw_id", "")
-    audit_entries = data.get("audit_entries", [])
+    invoice_id = request.invoice_id
+    raw_id = request.raw_id or ""
+    audit_entries = request.audit_entries
     
     audit_record_id = f"AUDIT-{uuid4().hex[:10].upper()}"
     

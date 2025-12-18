@@ -13,9 +13,9 @@ Run: uvicorn src.mcp.atlas_server:app --port 8002
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, timezone, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict, Literal
 from uuid import uuid4
 import random
 
@@ -40,18 +40,176 @@ app.add_middleware(
 # Request/Response Models
 # ============================================================================
 
-class ToolRequest(BaseModel):
-    """Generic tool request."""
-    class Config:
-        extra = "allow"
-
-
 class ToolResponse(BaseModel):
     """Generic tool response."""
     success: bool
     tool: str
     result: dict[str, Any]
     timestamp: str
+
+
+# --- Extract OCR ---
+class ExtractOCRRequest(BaseModel):
+    """Request model for extract_ocr tool."""
+    file_path: str = Field(..., description="Path to file to process")
+    provider: Optional[Literal["google_vision", "aws_textract", "tesseract"]] = Field(
+        None, description="OCR provider to use"
+    )
+    file_type: Optional[str] = Field("pdf", description="Type of document (pdf, image)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "file_path": "/uploads/invoice_scan.pdf",
+                "provider": "google_vision"
+            }
+        }
+
+
+# --- Enrich Vendor ---
+class EnrichVendorRequest(BaseModel):
+    """Request model for enrich_vendor tool."""
+    vendor_name: str = Field(..., description="Vendor name to enrich")
+    tax_id: Optional[str] = Field(None, description="Optional tax ID for better matching")
+    vendor_id: Optional[str] = Field(None, description="Optional vendor ID")
+    provider: Optional[Literal["clearbit", "people_data_labs", "vendor_db"]] = Field(
+        None, description="Enrichment provider"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "vendor_name": "Acme Technologies Inc",
+                "tax_id": "TAX-123456",
+                "provider": "clearbit"
+            }
+        }
+
+
+# --- Fetch PO Data ---
+class FetchPODataRequest(BaseModel):
+    """Request model for fetch_po_data tool."""
+    po_number: Optional[str] = Field(None, description="PO number to fetch")
+    vendor_name: Optional[str] = Field(None, description="Vendor name for filtering")
+    vendor_id: Optional[str] = Field(None, description="Vendor identifier")
+    invoice_id: Optional[str] = Field(None, description="Related invoice ID")
+    erp_system: Optional[Literal["sap", "oracle", "netsuite"]] = Field(
+        None, description="ERP system to query"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "po_number": "PO-2024-001234",
+                "vendor_name": "Acme Corp",
+                "erp_system": "sap"
+            }
+        }
+
+
+# --- Fetch GRN Data ---
+class FetchGRNDataRequest(BaseModel):
+    """Request model for fetch_grn_data tool."""
+    po_number: Optional[str] = Field(None, description="Related PO number")
+    vendor_name: Optional[str] = Field(None, description="Vendor name")
+    grn_number: Optional[str] = Field(None, description="GRN number to fetch")
+    invoice_id: Optional[str] = Field(None, description="Related invoice ID")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "po_number": "PO-2024-001234",
+                "vendor_name": "Acme Corp"
+            }
+        }
+
+
+# --- Post to ERP ---
+class PostToERPRequest(BaseModel):
+    """Request model for post_to_erp tool."""
+    invoice_id: str = Field(..., description="Invoice identifier")
+    entries: List[Dict[str, Any]] = Field(..., description="Accounting entries to post")
+    invoice_data: Optional[Dict[str, Any]] = Field(None, description="Complete invoice data")
+    erp_system: Optional[Literal["sap", "oracle", "netsuite"]] = Field(
+        None, description="Target ERP system"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice_id": "INV-2024-001",
+                "entries": [
+                    {"type": "DEBIT", "account": "6000", "amount": 15000},
+                    {"type": "CREDIT", "account": "2100", "amount": 15000}
+                ],
+                "erp_system": "sap"
+            }
+        }
+
+
+# --- Schedule Payment ---
+class SchedulePaymentRequest(BaseModel):
+    """Request model for schedule_payment tool."""
+    invoice_id: str = Field(..., description="Invoice to pay")
+    amount: float = Field(..., description="Payment amount")
+    due_date: Optional[str] = Field(None, description="Payment due date")
+    currency: Optional[str] = Field("USD", description="Payment currency")
+    vendor_id: Optional[str] = Field(None, description="Vendor identifier")
+    payment_method: Optional[Literal["ach", "wire", "check"]] = Field(
+        None, description="Payment method"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice_id": "INV-2024-001",
+                "amount": 15000.00,
+                "due_date": "2024-02-15",
+                "payment_method": "ach"
+            }
+        }
+
+
+# --- Send Notification ---
+class SendNotificationRequest(BaseModel):
+    """Request model for send_notification tool."""
+    recipients: List[str] = Field(..., description="List of email recipients")
+    subject: str = Field(..., description="Email subject")
+    body: str = Field(..., description="Email body")
+    notification_type: Optional[str] = Field("email", description="Type of notification")
+    invoice_id: Optional[str] = Field(None, description="Related invoice ID")
+    provider: Optional[Literal["sendgrid", "ses", "smtp"]] = Field(
+        None, description="Email provider"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "recipients": ["vendor@example.com", "finance@company.com"],
+                "subject": "Invoice INV-2024-001 Processed",
+                "body": "Your invoice has been approved for payment.",
+                "provider": "sendgrid"
+            }
+        }
+
+
+# --- Apply Policy ---
+class ApplyPolicyRequest(BaseModel):
+    """Request model for apply_policy tool."""
+    invoice: Dict[str, Any] = Field(..., description="Invoice data")
+    vendor_risk_score: Optional[float] = Field(None, description="Vendor risk score")
+    vendor: Optional[Dict[str, Any]] = Field(None, description="Vendor profile")
+    amount: Optional[float] = Field(None, description="Invoice amount")
+    policy_type: Optional[str] = Field(None, description="Policy type to apply")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invoice": {"invoice_id": "INV-001", "amount": 15000, "vendor_name": "Acme Corp"},
+                "vendor_risk_score": 0.25,
+                "policy_type": "standard_approval"
+            }
+        }
 
 
 # ============================================================================
@@ -190,19 +348,16 @@ async def list_tools():
 # Tool Endpoints
 # ============================================================================
 
-@app.post("/tools/extract_ocr")
-async def extract_ocr(request: ToolRequest):
+@app.post("/tools/extract_ocr", response_model=ToolResponse)
+async def extract_ocr(request: ExtractOCRRequest):
     """
     Extract text from invoice document using OCR.
     
-    Args:
-        file_path: Path to document
-        file_base64: Base64 encoded document
-        file_type: Type of document (pdf, image)
+    Digitizes paper invoices or scanned documents using various OCR providers.
     """
-    data = request.model_dump()
-    file_path = data.get("file_path", "")
-    file_type = data.get("file_type", "pdf")
+    file_path = request.file_path
+    file_type = request.file_type or "pdf"
+    provider = request.provider or "google_vision"
     
     # Simulate OCR extraction
     invoice_id = f"INV-{random.randint(10000, 99999)}"
@@ -225,7 +380,7 @@ async def extract_ocr(request: ToolRequest):
             "tax_amount": round(amount * 0.08, 2)
         },
         "confidence": round(random.uniform(0.85, 0.98), 2),
-        "ocr_engine": "google_vision",
+        "ocr_engine": provider,
         "file_type": file_type,
         "extracted_at": datetime.now(timezone.utc).isoformat()
     }
@@ -238,21 +393,16 @@ async def extract_ocr(request: ToolRequest):
     )
 
 
-@app.post("/tools/enrich_vendor")
-async def enrich_vendor(request: ToolRequest):
+@app.post("/tools/enrich_vendor", response_model=ToolResponse)
+async def enrich_vendor(request: EnrichVendorRequest):
     """
     Enrich vendor data from external sources.
     
-    Args:
-        vendor_name: Name of vendor
-        vendor_id: Optional vendor ID
-        domain: Optional company domain
+    Gets company details, risk scores, and industry information from data providers.
     """
-    data = request.model_dump()
-    vendor_name = data.get("vendor_name", "Unknown Vendor")
-    
-    # Simulate vendor enrichment
-    vendor_id = data.get("vendor_id", f"VND-{uuid4().hex[:8].upper()}")
+    vendor_name = request.vendor_name
+    vendor_id = request.vendor_id or f"VND-{uuid4().hex[:8].upper()}"
+    provider = request.provider or "clearbit"
     
     result = {
         "vendor_id": vendor_id,
@@ -274,7 +424,7 @@ async def enrich_vendor(request: ToolRequest):
             "payment_terms_default": "NET30",
             "risk_score": round(random.uniform(0.1, 0.5), 2)
         },
-        "enrichment_source": "clearbit",
+        "enrichment_source": provider,
         "enriched_at": datetime.now(timezone.utc).isoformat(),
         "confidence": round(random.uniform(0.80, 0.95), 2)
     }
@@ -287,19 +437,16 @@ async def enrich_vendor(request: ToolRequest):
     )
 
 
-@app.post("/tools/fetch_po_data")
-async def fetch_po_data(request: ToolRequest):
+@app.post("/tools/fetch_po_data", response_model=ToolResponse)
+async def fetch_po_data(request: FetchPODataRequest):
     """
     Fetch Purchase Order data from ERP.
     
-    Args:
-        po_number: Purchase order number
-        vendor_id: Vendor identifier
-        invoice_id: Related invoice ID
+    Retrieves PO details for invoice matching from various ERP systems.
     """
-    data = request.model_dump()
-    po_number = data.get("po_number", f"PO-{random.randint(10000, 99999)}")
-    vendor_id = data.get("vendor_id", "")
+    po_number = request.po_number or f"PO-{random.randint(10000, 99999)}"
+    vendor_id = request.vendor_id or ""
+    erp_system = request.erp_system or "sap"
     
     # Simulate PO fetch
     po_amount = round(random.uniform(5000, 50000), 2)
@@ -320,7 +467,7 @@ async def fetch_po_data(request: ToolRequest):
             "cost_center": f"CC-{random.randint(100, 999)}",
             "department": random.choice(["Engineering", "Operations", "IT", "Finance"])
         },
-        "source": "sap_erp",
+        "source": f"{erp_system}_erp",
         "fetched_at": datetime.now(timezone.utc).isoformat()
     }
     
@@ -332,19 +479,15 @@ async def fetch_po_data(request: ToolRequest):
     )
 
 
-@app.post("/tools/fetch_grn_data")
-async def fetch_grn_data(request: ToolRequest):
+@app.post("/tools/fetch_grn_data", response_model=ToolResponse)
+async def fetch_grn_data(request: FetchGRNDataRequest):
     """
     Fetch Goods Receipt Note data from ERP.
     
-    Args:
-        grn_number: GRN number
-        po_number: Related PO number
-        invoice_id: Related invoice ID
+    Verifies that goods were actually received before approving invoice payment.
     """
-    data = request.model_dump()
-    grn_number = data.get("grn_number", f"GRN-{random.randint(10000, 99999)}")
-    po_number = data.get("po_number", "")
+    grn_number = request.grn_number or f"GRN-{random.randint(10000, 99999)}"
+    po_number = request.po_number or ""
     
     # Simulate GRN fetch
     grn_amount = round(random.uniform(5000, 50000), 2)
@@ -377,18 +520,15 @@ async def fetch_grn_data(request: ToolRequest):
     )
 
 
-@app.post("/tools/post_to_erp")
-async def post_to_erp(request: ToolRequest):
+@app.post("/tools/post_to_erp", response_model=ToolResponse)
+async def post_to_erp(request: PostToERPRequest):
     """
     Post invoice to ERP system.
     
-    Args:
-        invoice_id: Invoice identifier
-        invoice_data: Complete invoice data
-        journal_entries: Accounting entries to post
+    Creates accounting entries and updates financial records in the ERP.
     """
-    data = request.model_dump()
-    invoice_id = data.get("invoice_id", f"INV-{uuid4().hex[:8].upper()}")
+    invoice_id = request.invoice_id
+    erp_system = request.erp_system or "mock_erp"
     
     # Simulate ERP posting
     erp_doc_id = f"ERP-{uuid4().hex[:10].upper()}"
@@ -398,7 +538,7 @@ async def post_to_erp(request: ToolRequest):
         "invoice_id": invoice_id,
         "posting_status": "SUCCESS",
         "posted_at": datetime.now(timezone.utc).isoformat(),
-        "erp_system": "mock_erp",
+        "erp_system": erp_system,
         "fiscal_year": datetime.now().year,
         "fiscal_period": datetime.now().month,
         "document_type": "VENDOR_INVOICE",
@@ -415,22 +555,17 @@ async def post_to_erp(request: ToolRequest):
     )
 
 
-@app.post("/tools/schedule_payment")
-async def schedule_payment(request: ToolRequest):
+@app.post("/tools/schedule_payment", response_model=ToolResponse)
+async def schedule_payment(request: SchedulePaymentRequest):
     """
     Schedule payment for approved invoice.
     
-    Args:
-        invoice_id: Invoice identifier
-        amount: Payment amount
-        currency: Payment currency
-        due_date: Payment due date
-        vendor_id: Vendor identifier
+    Creates payment instruction based on payment terms and due date.
     """
-    data = request.model_dump()
-    invoice_id = data.get("invoice_id", "")
-    amount = data.get("amount", 0)
-    currency = data.get("currency", "USD")
+    invoice_id = request.invoice_id
+    amount = request.amount
+    currency = request.currency or "USD"
+    payment_method = request.payment_method or random.choice(["ach", "wire", "check"])
     
     # Simulate payment scheduling
     payment_id = f"PAY-{uuid4().hex[:10].upper()}"
@@ -442,7 +577,7 @@ async def schedule_payment(request: ToolRequest):
         "amount": amount,
         "currency": currency,
         "scheduled_date": payment_date.strftime("%Y-%m-%d"),
-        "payment_method": random.choice(["ACH", "WIRE", "CHECK"]),
+        "payment_method": payment_method.upper(),
         "status": "SCHEDULED",
         "bank_account": "****1234",
         "batch_id": f"BATCH-{datetime.now().strftime('%Y%m%d')}-{random.randint(100, 999)}",
@@ -457,41 +592,34 @@ async def schedule_payment(request: ToolRequest):
     )
 
 
-@app.post("/tools/send_notification")
-async def send_notification(request: ToolRequest):
+@app.post("/tools/send_notification", response_model=ToolResponse)
+async def send_notification(request: SendNotificationRequest):
     """
     Send notification via email or other channels.
     
-    Args:
-        recipient: Notification recipient
-        notification_type: Type of notification
-        subject: Notification subject
-        message: Notification message
-        invoice_id: Related invoice ID
+    Notifies vendors of payment status or internal teams of processing updates.
     """
-    data = request.model_dump()
-    recipient = data.get("recipient", data.get("recipients", ["admin@company.com"]))
-    notification_type = data.get("notification_type", "email")
-    subject = data.get("subject", "Invoice Processing Notification")
-    message = data.get("message", "Your invoice has been processed")
-    invoice_id = data.get("invoice_id", "")
+    recipients = request.recipients
+    notification_type = request.notification_type or "email"
+    subject = request.subject
+    message = request.body
+    invoice_id = request.invoice_id or ""
+    provider = request.provider or "sendgrid"
     
     # Simulate notification sending
     notification_id = f"NOTIF-{uuid4().hex[:10].upper()}"
     
-    if isinstance(recipient, str):
-        recipient = [recipient]
-    
     result = {
         "notification_id": notification_id,
-        "recipient": recipient,
+        "recipients": recipients,
         "notification_type": notification_type,
         "subject": subject,
         "message_preview": message[:100] + "..." if len(message) > 100 else message,
         "invoice_id": invoice_id,
         "status": "SENT",
+        "provider": provider,
         "sent_at": datetime.now(timezone.utc).isoformat(),
-        "delivery_status": {r: "DELIVERED" for r in recipient}
+        "delivery_status": {r: "DELIVERED" for r in recipients}
     }
     
     return ToolResponse(
@@ -502,26 +630,25 @@ async def send_notification(request: ToolRequest):
     )
 
 
-@app.post("/tools/apply_policy")
-async def apply_policy(request: ToolRequest):
+@app.post("/tools/apply_policy", response_model=ToolResponse)
+async def apply_policy(request: ApplyPolicyRequest):
     """
     Apply approval policy to an invoice.
     
-    Args:
-        invoice: Invoice data
-        vendor: Vendor profile
-        amount: Invoice amount
+    Determines if invoice can be auto-approved or needs escalation based on rules.
     """
-    data = request.model_dump()
-    invoice = data.get("invoice", {})
-    vendor = data.get("vendor", {})
-    amount = data.get("amount", invoice.get("amount", 0))
+    invoice = request.invoice
+    vendor = request.vendor or {}
+    amount = request.amount or invoice.get("amount", 0)
+    risk_score = request.vendor_risk_score
+    
+    # Get risk score from vendor if not provided directly
+    if risk_score is None:
+        risk_score = vendor.get("risk_score", 0) if vendor else 0
     
     # Policy thresholds
     AUTO_APPROVE_LIMIT = 10000.0
     MANAGER_APPROVE_LIMIT = 50000.0
-    
-    risk_score = vendor.get("risk_score", 0) if vendor else 0
     
     # Apply policy rules
     if risk_score > 0.5:
