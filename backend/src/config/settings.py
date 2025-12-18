@@ -22,10 +22,10 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     
-    # LLM - Gemini
-    GEMINI_API_KEY: Optional[str] = None
-    LLM_MODEL: str = "gemini-2.0-flash"
-    LLM_TEMPERATURE: float = 0.7
+    # LLM - Groq
+    GROQ_API_KEY: Optional[str] = None
+    LLM_MODEL: str = "llama-3.1-8b-instant"
+    LLM_TEMPERATURE: float = 0.0
     LLM_MAX_RETRIES: int = 2
     
     # MCP Servers

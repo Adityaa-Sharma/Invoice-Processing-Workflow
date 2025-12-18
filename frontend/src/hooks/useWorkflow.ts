@@ -39,6 +39,7 @@ export interface WorkflowState {
   status: 'idle' | 'running' | 'hitl' | 'done' | 'error';
   logs: LogEntry[];
   hitlData: { reason: string; checkpoint_id: string } | null;
+  hitlResolved: boolean; // Track if HITL was already resolved (to prevent replay)
   stageData: Record<string, unknown>;
 }
 
@@ -63,6 +64,7 @@ export function useWorkflow() {
     status: 'idle',
     logs: [],
     hitlData: null,
+    hitlResolved: false,
     stageData: {},
   });
   const [loading, setLoading] = useState(false);
@@ -115,6 +117,9 @@ export function useWorkflow() {
         if (data.type === 'stage_update') {
           const stage = data.stage || '';
           const stageStatus = data.status || '';
+          
+          // Debug logging
+          console.log(`📊 Stage update: ${stage} → ${stageStatus}`);
 
           setState((s: WorkflowState) => {
             const newState = { ...s };
@@ -130,11 +135,12 @@ export function useWorkflow() {
               newState.stageData = { ...s.stageData, [stage]: data.data };
             }
 
-            // Handle workflow completion
-            if (stageStatus === 'workflow_complete') {
-              const finalStatus = data.data?.final_status;
+            // Handle workflow completion - check both workflow_complete status AND COMPLETE stage
+            if (stageStatus === 'workflow_complete' || (stage === 'COMPLETE' && stageStatus === 'completed')) {
+              const finalStatus = data.data?.final_status || data.data?.status || 'COMPLETED';
               if (finalStatus === 'COMPLETED') {
                 newState.status = 'done';
+                newState.currentStage = 'COMPLETE'; // Ensure we show final stage
               } else if (finalStatus === 'REQUIRES_MANUAL_HANDLING') {
                 newState.status = 'error';
               }
@@ -142,13 +148,20 @@ export function useWorkflow() {
               eventSource.close();
             }
 
-            // Handle paused for HITL
-            if (stage === 'CHECKPOINT_HITL' && stageStatus === 'completed') {
+            // Handle paused for HITL - but skip if already resolved
+            if (stage === 'CHECKPOINT_HITL' && stageStatus === 'completed' && !s.hitlResolved) {
               newState.status = 'hitl';
               newState.hitlData = {
                 reason: 'Match failed - manual review required',
                 checkpoint_id: (data.data?.checkpoint_id as string) || '',
               };
+            }
+            
+            // If HITL_DECISION stage starts or completes, mark as resolved
+            if (stage === 'HITL_DECISION' && (stageStatus === 'started' || stageStatus === 'completed')) {
+              newState.hitlResolved = true;
+              newState.status = 'running';
+              newState.hitlData = null;
             }
 
             return newState;
@@ -191,6 +204,7 @@ export function useWorkflow() {
       logs: [], 
       status: 'running', 
       hitlData: null,
+      hitlResolved: false, // Reset for new workflow
       stageData: {},
       currentStage: '',
     }));
@@ -290,7 +304,8 @@ export function useWorkflow() {
       
       if (res.ok) {
         addLog('HITL', approved ? '✅ Approved by reviewer' : '❌ Rejected by reviewer', approved ? 'success' : 'error');
-        setState((s: WorkflowState) => ({ ...s, status: 'running', hitlData: null }));
+        // Mark HITL as resolved to prevent replay showing HITL UI again
+        setState((s: WorkflowState) => ({ ...s, status: 'running', hitlData: null, hitlResolved: true }));
         // Wait a moment for backend to start resumed workflow, then reconnect SSE
         if (state.workflowId) {
           addLog('HITL_DECISION', '🔄 Resuming workflow...', 'info');
@@ -309,7 +324,7 @@ export function useWorkflow() {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], hitlData: null, stageData: {} });
+    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], hitlData: null, hitlResolved: false, stageData: {} });
   }, []);
 
   useEffect(() => {

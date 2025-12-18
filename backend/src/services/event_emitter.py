@@ -135,11 +135,16 @@ class WorkflowEventEmitter:
         
         logger.info(f"New subscriber for thread: {thread_id}")
         
+        workflow_already_complete = False
+        
         try:
             # Send history first if requested
             if include_history:
                 for event in self._event_history.get(thread_id, []):
                     yield event
+                    # Check if workflow already completed in history
+                    if event.get("type") == "stage_update" and event.get("status") == "workflow_complete":
+                        workflow_already_complete = True
             
             # Send welcome event
             yield {
@@ -147,6 +152,11 @@ class WorkflowEventEmitter:
                 "thread_id": thread_id,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+            
+            # If workflow already complete from history, don't wait for more events
+            if workflow_already_complete:
+                logger.info(f"Workflow already complete for thread: {thread_id}, closing SSE")
+                return
             
             # Stream new events
             while True:

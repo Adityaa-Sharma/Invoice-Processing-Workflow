@@ -1,10 +1,10 @@
-"""LLM Service - Gemini Integration for Invoice Processing Agent.
+"""LLM Service - Groq Integration for Invoice Processing Agent.
 
 Provides LLM capabilities for intelligent decision making in the workflow.
-Uses Google's Gemini model via LangChain.
+Uses Groq's LLama model via LangChain.
 """
 from typing import Any, Optional
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -30,28 +30,26 @@ Task: {task}
 """
 
 # Singleton LLM instance
-_llm_instance: Optional[ChatGoogleGenerativeAI] = None
+_llm_instance: Optional[ChatGroq] = None
 
 
-def get_llm() -> ChatGoogleGenerativeAI:
+def get_llm() -> ChatGroq:
     """Get or create the LLM instance (singleton)."""
     global _llm_instance
     
     if _llm_instance is not None:
         return _llm_instance
     
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not set, LLM features disabled")
+    if not settings.GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY not set, LLM features disabled")
         return None
     
-    logger.info(f"Initializing Gemini LLM: {settings.LLM_MODEL}")
+    logger.info(f"Initializing Groq LLM: {settings.LLM_MODEL}")
     
-    _llm_instance = ChatGoogleGenerativeAI(
+    _llm_instance = ChatGroq(
         model=settings.LLM_MODEL,
-        google_api_key=settings.GEMINI_API_KEY,
+        api_key=settings.GROQ_API_KEY,
         temperature=settings.LLM_TEMPERATURE,
-        max_tokens=None,
-        timeout=30,
         max_retries=settings.LLM_MAX_RETRIES,
     )
     

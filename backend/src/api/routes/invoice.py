@@ -66,7 +66,19 @@ async def _run_workflow_async(
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        # Emit workflow complete event
+        # Check if workflow is paused for HITL (don't emit workflow_complete yet)
+        current_stage = result.get("current_stage", "")
+        status = result.get("status", "")
+        
+        if current_stage == "CHECKPOINT_HITL" or status == "PAUSED":
+            logger.info(
+                f"⏸️ Workflow paused for HITL for thread: {thread_id}, "
+                f"stage: {current_stage}, awaiting human decision"
+            )
+            # Don't emit workflow_complete - workflow will resume after HITL decision
+            return
+        
+        # Emit workflow complete event (only if actually complete)
         final_status = result.get("status", "COMPLETED")
         await emit_workflow_complete(thread_id, final_status, {
             "current_stage": result.get("current_stage"),
