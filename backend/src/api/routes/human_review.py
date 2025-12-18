@@ -1,4 +1,5 @@
 """Human review endpoints for HITL workflow."""
+import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Depends
@@ -16,6 +17,7 @@ from ...db.checkpoint_store import get_checkpointer
 from ...db.models import HumanReviewQueue
 from ..dependencies import get_db_session
 from ...utils.logger import get_logger
+from ...graph.nodes import set_thread_id
 
 router = APIRouter(prefix="/human-review", tags=["Human Review"])
 logger = get_logger("api.human_review")
@@ -153,7 +155,7 @@ async def submit_decision(
                 detail=f"Workflow not found: {decision.thread_id}"
             )
         
-        # Resume workflow with human decision
+        # Resume workflow with human decision in background task
         checkpointer = get_checkpointer()
         workflow = create_invoice_workflow(checkpointer)
         
@@ -163,30 +165,39 @@ async def submit_decision(
         # Resume with Command containing the human decision
         logger.info(f"Resuming workflow with decision: {decision.decision}")
         
-        # Run asynchronously
         resume_input = Command(resume={
             "decision": decision.decision,
             "reviewer_id": decision.reviewer_id,
             "notes": decision.notes or "",
         })
-        result = await workflow.ainvoke(resume_input, config)
         
-        # Update stored state
-        _workflow_states[decision.thread_id]["result"] = result
+        # Run workflow resume in background task to not block SSE reconnection
+        async def _resume_workflow_background():
+            """Run resumed workflow in background so SSE can reconnect first."""
+            await asyncio.sleep(0.5)  # Wait for SSE to reconnect
+            set_thread_id(decision.thread_id)  # Set thread_id for event emission
+            logger.info(f"[Background] Starting resumed workflow for thread: {decision.thread_id}")
+            result = await workflow.ainvoke(resume_input, config)
+            # Update stored state
+            _workflow_states[decision.thread_id]["result"] = result
+            logger.info(f"[Background] Resumed workflow completed for thread: {decision.thread_id}")
         
-        # Determine next stage based on decision
+        # Start background task
+        asyncio.create_task(_resume_workflow_background())
+        
+        # Determine next stage based on decision - return immediately
         if decision.decision == "ACCEPT":
-            next_stage = result.get("current_stage", "RECONCILE")
-            status = result.get("status", "RUNNING")
-            message = "Invoice accepted. Workflow resumed and continuing to completion."
+            next_stage = "RECONCILE"
+            status = "RUNNING"
+            message = "Invoice accepted. Workflow resuming..."
         else:
             next_stage = "MANUAL_HANDOFF"
             status = "REQUIRES_MANUAL_HANDLING"
             message = "Invoice rejected. Requires manual handling."
         
         logger.info(
-            f"Workflow resumed for thread: {decision.thread_id}, "
-            f"next_stage: {next_stage}, status: {status}"
+            f"Decision accepted for thread: {decision.thread_id}, "
+            f"decision: {decision.decision}, workflow resuming in background"
         )
         
         return ReviewDecisionResponse(

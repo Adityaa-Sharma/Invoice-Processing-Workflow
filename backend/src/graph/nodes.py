@@ -327,7 +327,8 @@ async def hitl_decision_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     Uses LangGraph's interrupt() for clean pause/resume.
     This is a non-deterministic node.
     """
-    logger.info("Executing HITL_DECISION node")
+    thread_id = _get_thread_id_from_state(state)
+    logger.info("👨‍💼 HITL_DECISION: Processing human decision")
     
     # Check if we already have a decision (resuming after interrupt)
     if state.get("human_decision"):
@@ -337,7 +338,7 @@ async def hitl_decision_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     # Interrupt and wait for human input
     # This will pause the workflow until resumed via API with Command(resume=...)
-    logger.info("Interrupting for human review")
+    logger.info("⏸️ Interrupting for human review")
     human_input = interrupt({
         "type": "human_review",
         "hitl_checkpoint_id": state.get("hitl_checkpoint_id"),
@@ -350,23 +351,35 @@ async def hitl_decision_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     # After resume, process the decision
     # The human_input will contain the decision from Command(resume={...})
-    return {
-        "human_decision": human_input.get("decision"),
+    decision = human_input.get("decision", "unknown")
+    
+    # Emit events now that workflow has resumed
+    await emit_stage_started(thread_id, "HITL_DECISION", {"decision": decision})
+    await emit_log_message(thread_id, "info", f"👨‍💼 Human decision received: {decision}")
+    await emit_log_message(thread_id, "info", f"📝 Reviewer: {human_input.get('reviewer_id', 'unknown')}")
+    if human_input.get("notes"):
+        await emit_log_message(thread_id, "info", f"💬 Notes: {human_input.get('notes')}")
+    
+    result = {
+        "human_decision": decision,
         "reviewer_id": human_input.get("reviewer_id"),
         "reviewer_notes": human_input.get("notes", ""),
         "current_stage": "HITL_DECISION",
-        "status": "RUNNING" if human_input.get("decision") == "ACCEPT" else "REQUIRES_MANUAL_HANDLING",
+        "status": "RUNNING" if decision == "ACCEPT" else "REQUIRES_MANUAL_HANDLING",
         "audit_log": [{
             "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
             "stage": "HITL_DECISION",
-            "action": f"decision_{human_input.get('decision', 'unknown').lower()}",
+            "action": f"decision_{decision.lower()}",
             "details": {
-                "decision": human_input.get("decision"),
+                "decision": decision,
                 "reviewer_id": human_input.get("reviewer_id"),
                 "notes": human_input.get("notes", "")
             }
         }]
     }
+    
+    await emit_stage_completed(thread_id, "HITL_DECISION", {"decision": decision})
+    return result
 
 
 async def reconcile_node(state: InvoiceWorkflowState) -> dict[str, Any]:

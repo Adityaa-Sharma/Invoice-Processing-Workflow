@@ -291,8 +291,11 @@ export function useWorkflow() {
       if (res.ok) {
         addLog('HITL', approved ? '✅ Approved by reviewer' : '❌ Rejected by reviewer', approved ? 'success' : 'error');
         setState((s: WorkflowState) => ({ ...s, status: 'running', hitlData: null }));
-        // Reconnect SSE for continued updates
-        if (state.workflowId) connectSSE(state.workflowId);
+        // Wait a moment for backend to start resumed workflow, then reconnect SSE
+        if (state.workflowId) {
+          addLog('HITL_DECISION', '🔄 Resuming workflow...', 'info');
+          setTimeout(() => connectSSE(state.workflowId!), 600);
+        }
       }
     } catch (err) {
       addLog('ERROR', String(err), 'error');

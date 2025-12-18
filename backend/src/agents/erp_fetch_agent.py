@@ -143,33 +143,74 @@ class ErpFetchAgent(BaseAgent):
             return self.handle_error("RETRIEVE", e, state)
     
     def _fetch_purchase_orders(self, po_refs: list, invoice: dict) -> list[dict]:
-        """Mock fetch purchase orders from ERP."""
-        pos = []
+        """
+        Mock fetch purchase orders from ERP.
         
-        # Generate mock PO data based on invoice
+        Returns realistic mock PO data that may or may NOT match the invoice.
+        This allows testing of both MATCHED and FAILED scenarios:
+        - If invoice vendor starts with 'test' or 'acme' or 'good' → returns matching PO
+        - Otherwise → returns PO with different values (triggers HITL)
+        """
+        pos = []
+        vendor_name = invoice.get("vendor_name", "").lower().strip()
+        invoice_amount = invoice.get("amount", 0)
+        
+        # Known vendor PREFIXES that will MATCH (for testing successful flow)
+        # Use prefix matching to avoid false positives like "Unknown Corp"
+        matching_prefixes = ["test", "acme", "good", "valid", "approved"]
+        is_known_vendor = any(vendor_name.startswith(prefix) for prefix in matching_prefixes)
+        
+        self.logger.info(f"ERP Fetch: vendor='{vendor_name}', is_known={is_known_vendor}")
+        
         if po_refs:
             for po_ref in po_refs:
+                if is_known_vendor:
+                    # Return matching PO for known test vendors
+                    pos.append({
+                        "po_number": po_ref,
+                        "vendor_name": invoice.get("vendor_name", ""),
+                        "total_amount": invoice_amount,
+                        "currency": invoice.get("currency", "USD"),
+                        "status": "APPROVED",
+                        "line_items": invoice.get("line_items", []),
+                        "created_date": "2024-01-15"
+                    })
+                else:
+                    # Return MISMATCHED PO for unknown vendors (triggers HITL)
+                    pos.append({
+                        "po_number": po_ref,
+                        "vendor_name": "Authorized Vendor Inc",  # Different vendor
+                        "total_amount": invoice_amount * 0.5,     # 50% of invoice (fails match)
+                        "currency": "EUR",                        # Different currency
+                        "status": "APPROVED",
+                        "line_items": [{"desc": "Standard Item", "qty": 1, "unit_price": 100, "total": 100}],
+                        "created_date": "2024-01-15"
+                    })
+        else:
+            # No PO refs detected - generate mock based on vendor
+            invoice_id = invoice.get("invoice_id", "INV-001")
+            
+            if is_known_vendor:
                 pos.append({
-                    "po_number": po_ref,
+                    "po_number": f"PO-{invoice_id.replace('INV-', '')}",
                     "vendor_name": invoice.get("vendor_name", ""),
-                    "total_amount": invoice.get("amount", 0),
+                    "total_amount": invoice_amount,
                     "currency": invoice.get("currency", "USD"),
                     "status": "APPROVED",
                     "line_items": invoice.get("line_items", []),
                     "created_date": "2024-01-15"
                 })
-        else:
-            # Generate a mock PO if none detected
-            invoice_id = invoice.get("invoice_id", "INV-001")
-            pos.append({
-                "po_number": f"PO-{invoice_id.replace('INV-', '')}",
-                "vendor_name": invoice.get("vendor_name", ""),
-                "total_amount": invoice.get("amount", 0),
-                "currency": invoice.get("currency", "USD"),
-                "status": "APPROVED",
-                "line_items": invoice.get("line_items", []),
-                "created_date": "2024-01-15"
-            })
+            else:
+                # Unknown vendor + no PO = likely fraud/error → HITL
+                pos.append({
+                    "po_number": f"PO-UNMATCHED-{invoice_id[-4:]}",
+                    "vendor_name": "Different Vendor LLC",
+                    "total_amount": 1000.00,  # Fixed amount that won't match
+                    "currency": "EUR",        # Different currency
+                    "status": "PENDING",
+                    "line_items": [],
+                    "created_date": "2024-01-15"
+                })
         
         return pos
     
