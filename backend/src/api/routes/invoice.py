@@ -1,5 +1,7 @@
 """Invoice submission and status endpoints."""
 import asyncio
+import json
+from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
@@ -24,6 +26,42 @@ logger = get_logger("api.invoice")
 
 # In-memory storage for demo (in production, use database)
 _workflow_states = {}
+
+# Path to sample invoice
+SAMPLE_INVOICE_PATH = Path(__file__).parent.parent.parent.parent / "config" / "sample_invoice.json"
+
+
+@router.get("/sample")
+async def get_sample_invoice():
+    """
+    Get sample invoice JSON for demo purposes.
+    
+    This returns the sample invoice that can be used to test the workflow.
+    """
+    try:
+        if SAMPLE_INVOICE_PATH.exists():
+            with open(SAMPLE_INVOICE_PATH, "r") as f:
+                return json.load(f)
+        else:
+            # Fallback sample
+            return {
+                "invoice_id": "INV-2024-001",
+                "vendor_name": "Acme Technologies Inc.",
+                "vendor_tax_id": "TAX-789012",
+                "invoice_date": "2024-01-15",
+                "due_date": "2024-02-15",
+                "amount": 15000.00,
+                "currency": "USD",
+                "line_items": [
+                    {"desc": "Enterprise Software License", "qty": 5, "unit_price": 2000.0, "total": 10000.0},
+                    {"desc": "Premium Support Package", "qty": 1, "unit_price": 5000.0, "total": 5000.0}
+                ],
+                "attachments": ["invoice_2024_001.pdf"],
+                "po_number": "PO-1766087376251"
+            }
+    except Exception as e:
+        logger.error(f"Error loading sample invoice: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def _run_workflow_async(

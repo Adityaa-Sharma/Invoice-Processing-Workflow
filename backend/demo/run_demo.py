@@ -2,7 +2,7 @@
 Demo script for Invoice Processing Workflow.
 
 This script demonstrates the full workflow execution including:
-- Invoice submission
+- Loading sample invoice from config/sample_invoice.json
 - All 12 processing stages
 - Bigtool selections
 - MCP routing
@@ -14,12 +14,40 @@ Run with: python -m demo.run_demo
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from src.graph.workflow import create_invoice_workflow, get_workflow_stages
 from src.graph.state import create_initial_state
 from src.db.checkpoint_store import get_memory_checkpointer
 from src.tools.bigtool_picker import BigtoolPicker
 from langgraph.types import Command
+
+# Path to sample invoice JSON
+SAMPLE_INVOICE_PATH = Path(__file__).parent.parent / "config" / "sample_invoice.json"
+
+
+def load_sample_invoice() -> dict:
+    """Load sample invoice from config file."""
+    if SAMPLE_INVOICE_PATH.exists():
+        with open(SAMPLE_INVOICE_PATH, "r") as f:
+            return json.load(f)
+    else:
+        # Fallback sample
+        return {
+            "invoice_id": "INV-2024-001",
+            "vendor_name": "Acme Technologies Inc.",
+            "vendor_tax_id": "TAX-789012",
+            "invoice_date": "2024-01-15",
+            "due_date": "2024-02-15",
+            "amount": 15000.00,
+            "currency": "USD",
+            "line_items": [
+                {"desc": "Enterprise Software License", "qty": 5, "unit_price": 2000.0, "total": 10000.0},
+                {"desc": "Premium Support Package", "qty": 1, "unit_price": 5000.0, "total": 5000.0}
+            ],
+            "attachments": ["invoice_2024_001.pdf"],
+            "po_number": "PO-1766087376251"
+        }
 
 
 def print_header(title: str):
@@ -44,23 +72,14 @@ def print_stage(stage: str, result: dict):
 async def run_matched_workflow():
     """Run workflow with matching invoice (no HITL)."""
     print_header("DEMO 1: Invoice Processing - Matched Flow")
+    print("Loading sample invoice from: config/sample_invoice.json")
     print("Invoice will match PO and complete without human review")
     
-    # Sample invoice that will match
-    invoice = {
-        "invoice_id": "INV-DEMO-001",
-        "vendor_name": "Acme Technologies Inc.",
-        "vendor_tax_id": "TAX-789012",
-        "invoice_date": "2024-01-15",
-        "due_date": "2024-02-15",
-        "amount": 15000.00,
-        "currency": "USD",
-        "line_items": [
-            {"desc": "Enterprise Software License", "qty": 5, "unit_price": 2000.0, "total": 10000.0},
-            {"desc": "Premium Support Package", "qty": 1, "unit_price": 5000.0, "total": 5000.0}
-        ],
-        "attachments": ["invoice_demo_001.pdf"]
-    }
+    # Load sample invoice from config file
+    invoice = load_sample_invoice()
+    
+    # Make invoice ID unique for this run
+    invoice["invoice_id"] = f"{invoice['invoice_id']}-{datetime.now().strftime('%H%M%S')}"
     
     print("\n📄 Input Invoice:")
     print(json.dumps(invoice, indent=2))

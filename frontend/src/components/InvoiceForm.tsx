@@ -101,10 +101,29 @@ export function InvoiceForm({ onSubmit, loading, disabled }: Props) {
     setForm({ ...DEMO, invoice_id: `INV-${Date.now()}` });
   };
 
+  // Load sample invoice from backend config
+  const loadSample = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/invoice/sample');
+      if (res.ok) {
+        const sample = await res.json();
+        // Update invoice_id with timestamp to make it unique
+        setForm({ ...sample, invoice_id: `${sample.invoice_id}-${Date.now().toString().slice(-6)}` });
+      }
+    } catch (err) {
+      console.error('Failed to load sample:', err);
+      // Fallback to local demo
+      fillDemo();
+    }
+  };
+
   return (
     <Card title="Submit Invoice" icon="📄">
       <form onSubmit={handleSubmit} className="space-y-3">
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={loadSample}>
+            📥 Load Sample
+          </Button>
           <Button type="button" variant="ghost" onClick={fillDemo}>
             🚀 Demo Data
           </Button>
