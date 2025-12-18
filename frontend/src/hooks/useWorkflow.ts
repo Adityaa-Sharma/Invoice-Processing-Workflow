@@ -31,6 +31,17 @@ export interface LogEntry {
   status: 'success' | 'error' | 'info' | 'warning';
   time: string;
   details?: Record<string, unknown>;
+  logType?: 'info' | 'tool_call' | 'tool_selection' | 'tool_result' | 'result' | 'decision' | 'warning' | 'error' | 'hitl' | 'success';
+}
+
+export interface ToolCallEntry {
+  stage: string;
+  toolName: string;
+  server: string;
+  status: 'started' | 'completed' | 'failed';
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  time: string;
 }
 
 export interface WorkflowState {
@@ -38,6 +49,7 @@ export interface WorkflowState {
   currentStage: string;
   status: 'idle' | 'running' | 'hitl' | 'done' | 'error';
   logs: LogEntry[];
+  toolCalls: ToolCallEntry[];
   hitlData: { reason: string; checkpoint_id: string } | null;
   hitlResolved: boolean; // Track if HITL was already resolved (to prevent replay)
   stageData: Record<string, unknown>;
@@ -45,7 +57,7 @@ export interface WorkflowState {
 
 // SSE Event types
 interface SSEEvent {
-  type: 'stage_update' | 'log' | 'connected' | 'heartbeat';
+  type: 'stage_update' | 'log' | 'tool_call' | 'connected' | 'heartbeat';
   thread_id: string;
   stage?: string;
   status?: string;
@@ -53,6 +65,11 @@ interface SSEEvent {
   level?: string;
   message?: string;
   details?: Record<string, unknown>;
+  log_type?: string;
+  tool_name?: string;
+  server?: string;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
   timestamp: string;
 }
 
@@ -63,6 +80,7 @@ export function useWorkflow() {
     currentStage: '',
     status: 'idle',
     logs: [],
+    toolCalls: [],
     hitlData: null,
     hitlResolved: false,
     stageData: {},
@@ -70,10 +88,17 @@ export function useWorkflow() {
   const [loading, setLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info', details?: Record<string, unknown>) => {
+  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info', details?: Record<string, unknown>, logType?: LogEntry['logType']) => {
     setState((s: WorkflowState) => ({
       ...s,
-      logs: [...s.logs, { stage, message, status, time: new Date().toLocaleTimeString(), details }],
+      logs: [...s.logs, { stage, message, status, time: new Date().toLocaleTimeString(), details, logType }],
+    }));
+  }, []);
+
+  const addToolCall = useCallback((toolCall: ToolCallEntry) => {
+    setState((s: WorkflowState) => ({
+      ...s,
+      toolCalls: [...s.toolCalls, toolCall],
     }));
   }, []);
 
@@ -98,7 +123,7 @@ export function useWorkflow() {
         console.log('📡 SSE Event:', data);
 
         if (data.type === 'connected') {
-          addLog('SSE', 'Connected to real-time updates', 'info');
+          addLog('SSE', 'Connected to real-time updates', 'info', undefined, 'info');
           return;
         }
 
@@ -107,10 +132,36 @@ export function useWorkflow() {
           return;
         }
 
+        if (data.type === 'tool_call') {
+          // Handle tool call events
+          const toolCall: ToolCallEntry = {
+            stage: data.stage || 'SYSTEM',
+            toolName: data.tool_name || 'unknown',
+            server: data.server || 'UNKNOWN',
+            status: data.status as 'started' | 'completed' | 'failed',
+            params: data.params,
+            result: data.result,
+            time: new Date().toLocaleTimeString(),
+          };
+          addToolCall(toolCall);
+          
+          // Also add as log entry for visibility
+          const emoji = data.status === 'started' ? '🔧' : data.status === 'completed' ? '✅' : '❌';
+          const logStatus = data.status === 'failed' ? 'error' : 'info';
+          addLog(
+            data.stage || 'SYSTEM',
+            `${emoji} Tool: ${data.tool_name}@${data.server} → ${data.status}`,
+            logStatus as LogEntry['status'],
+            { params: data.params, result: data.result },
+            'tool_call'
+          );
+          return;
+        }
+
         if (data.type === 'log') {
           const logStatus = data.level === 'error' ? 'error' : 
                            data.level === 'warning' ? 'warning' : 'info';
-          addLog(data.stage || 'SYSTEM', data.message || '', logStatus, data.details);
+          addLog(data.stage || 'SYSTEM', data.message || '', logStatus, data.details, data.log_type as LogEntry['logType']);
           return;
         }
 
@@ -198,20 +249,21 @@ export function useWorkflow() {
     };
 
     return eventSource;
-  }, [addLog]);
+  }, [addLog, addToolCall]);
 
   const submit = useCallback(async (invoice: Invoice) => {
     setLoading(true);
     setState((s: WorkflowState) => ({ 
       ...s, 
       logs: [], 
+      toolCalls: [],
       status: 'running', 
       hitlData: null,
       hitlResolved: false, // Reset for new workflow
       stageData: {},
       currentStage: '',
     }));
-    addLog('SUBMIT', `🚀 Submitting invoice for ${invoice.vendor_name}`, 'info');
+    addLog('SUBMIT', `🚀 Submitting invoice for ${invoice.vendor_name}`, 'info', undefined, 'info');
 
     try {
       const res = await fetch(`${API}/invoice/submit`, {
@@ -327,7 +379,7 @@ export function useWorkflow() {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], hitlData: null, hitlResolved: false, stageData: {} });
+    setState({ workflowId: null, currentStage: '', status: 'idle', logs: [], toolCalls: [], hitlData: null, hitlResolved: false, stageData: {} });
   }, []);
 
   useEffect(() => {

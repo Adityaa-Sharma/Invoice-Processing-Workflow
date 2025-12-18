@@ -86,7 +86,9 @@ class WorkflowEventEmitter:
         thread_id: str,
         level: str,
         message: str,
-        details: dict = None
+        details: dict = None,
+        stage: str = None,
+        log_type: str = None
     ) -> None:
         """
         Emit a log event to subscribers.
@@ -96,12 +98,16 @@ class WorkflowEventEmitter:
             level: Log level (info, warning, error)
             message: Log message
             details: Additional log details
+            stage: Current stage (for grouping)
+            log_type: Log type (info, tool_call, llm_call, result, etc.)
         """
         event = {
             "type": "log",
             "thread_id": thread_id,
             "level": level,
             "message": message,
+            "stage": stage,
+            "log_type": log_type or "info",
             "details": details or {},
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -114,6 +120,54 @@ class WorkflowEventEmitter:
                 await queue.put(event)
             except Exception as e:
                 logger.error(f"Failed to emit log event: {e}")
+    
+    async def emit_tool_call(
+        self,
+        thread_id: str,
+        stage: str,
+        tool_name: str,
+        server: str,
+        params: dict = None,
+        result: dict = None,
+        status: str = "started"
+    ) -> None:
+        """
+        Emit a tool call event for tracking MCP tool invocations.
+        
+        Args:
+            thread_id: Workflow thread ID
+            stage: Current workflow stage
+            tool_name: Name of the tool being called
+            server: MCP server (COMMON or ATLAS)
+            params: Tool parameters
+            result: Tool result (if completed)
+            status: Call status (started, completed, failed)
+        """
+        event = {
+            "type": "tool_call",
+            "thread_id": thread_id,
+            "stage": stage,
+            "tool_name": tool_name,
+            "server": server,
+            "params": params or {},
+            "result": result or {},
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        self._event_history[thread_id].append(event)
+        
+        logger.info(
+            f"🔧 Tool call: {tool_name}@{server} → {status}",
+            extra={"extra": {"thread_id": thread_id, "tool": tool_name, "server": server}}
+        )
+        
+        subscribers = self._subscribers.get(thread_id, [])
+        for queue in subscribers:
+            try:
+                await queue.put(event)
+            except Exception as e:
+                logger.error(f"Failed to emit tool_call event: {e}")
     
     async def subscribe(
         self,
@@ -232,8 +286,24 @@ async def emit_log_message(
     thread_id: str,
     level: str,
     message: str,
-    details: dict = None
+    details: dict = None,
+    stage: str = None,
+    log_type: str = None
 ) -> None:
     """Convenience function to emit log message."""
     emitter = get_event_emitter()
-    await emitter.emit_log(thread_id, level, message, details)
+    await emitter.emit_log(thread_id, level, message, details, stage, log_type)
+
+
+async def emit_tool_call(
+    thread_id: str,
+    stage: str,
+    tool_name: str,
+    server: str,
+    params: dict = None,
+    result: dict = None,
+    status: str = "started"
+) -> None:
+    """Convenience function to emit tool call event."""
+    emitter = get_event_emitter()
+    await emitter.emit_tool_call(thread_id, stage, tool_name, server, params, result, status)

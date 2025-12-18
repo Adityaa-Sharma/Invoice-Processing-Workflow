@@ -7,6 +7,7 @@ from .event_emitter import (
     emit_stage_failed,
     emit_workflow_complete,
     emit_log_message,
+    emit_tool_call,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "emit_stage_failed",
     "emit_workflow_complete",
     "emit_log_message",
+    "emit_tool_call",
 ]

@@ -66,7 +66,7 @@ export default function App() {
           </div>
 
           {/* Right: Log */}
-          <LogPanel logs={state.logs} />
+          <LogPanel logs={state.logs} toolCalls={state.toolCalls} />
         </div>
 
         {/* Footer */}

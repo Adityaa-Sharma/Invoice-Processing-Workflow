@@ -13,6 +13,7 @@ from ..services.event_emitter import (
     emit_stage_failed,
     emit_workflow_complete,
     emit_log_message,
+    emit_tool_call,
 )
 
 logger = get_logger("nodes")
@@ -59,21 +60,35 @@ async def intake_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info(f"📥 INTAKE: Processing invoice {invoice_id} from {vendor}")
     await emit_stage_started(thread_id, "INTAKE", {"invoice_id": invoice_id})
-    await emit_log_message(thread_id, "info", f"📥 Accepting invoice payload from {vendor}")
+    await emit_log_message(thread_id, "info", f"📥 Accepting invoice payload from {vendor}", stage="INTAKE", log_type="info")
     
     try:
         agent = AgentRegistry.get("INTAKE")
         
         # Log BigtoolPicker selection
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting validation tool...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting validation tool...", stage="INTAKE", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "INTAKE", "validate_schema", "COMMON", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("INTAKE", {})
-        if bigtool:
-            await emit_log_message(thread_id, "info", f"🔧 Selected: {bigtool.get('tool_name', 'default')} (score: {bigtool.get('confidence', 'N/A')})")
+        tool_name = bigtool.get('tool_name', 'validate_schema')
         
-        await emit_log_message(thread_id, "info", f"📋 Schema validated: {result.get('validated', False)}")
-        await emit_log_message(thread_id, "info", f"💾 Persisted with Raw ID: {result.get('raw_id')}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "INTAKE", tool_name, "COMMON",
+            params={"invoice_id": invoice_id},
+            result={"validated": result.get('validated'), "raw_id": result.get('raw_id')},
+            status="completed"
+        )
+        
+        if bigtool:
+            await emit_log_message(thread_id, "info", f"🔧 Selected: {tool_name} (score: {bigtool.get('confidence', 'N/A')})", stage="INTAKE", log_type="tool_result")
+        
+        await emit_log_message(thread_id, "info", f"📋 Schema validated: {result.get('validated', False)}", stage="INTAKE", log_type="result")
+        await emit_log_message(thread_id, "info", f"💾 Persisted with Raw ID: {result.get('raw_id')}", stage="INTAKE", log_type="result")
         
         await emit_stage_completed(thread_id, "INTAKE", {
             "raw_id": result.get("raw_id"),
@@ -84,7 +99,7 @@ async def intake_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "INTAKE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ INTAKE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ INTAKE failed: {str(e)}", stage="INTAKE", log_type="error")
         raise
 
 
@@ -101,26 +116,40 @@ async def understand_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info(f"🧠 UNDERSTAND: Running OCR on invoice {raw_id}")
     await emit_stage_started(thread_id, "UNDERSTAND", {"raw_id": raw_id})
-    await emit_log_message(thread_id, "info", "🧠 Starting document understanding...")
+    await emit_log_message(thread_id, "info", "🧠 Starting document understanding...", stage="UNDERSTAND", log_type="info")
     
     try:
         agent = AgentRegistry.get("UNDERSTAND")
         
         # Log BigtoolPicker selection for OCR
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting OCR provider...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting OCR provider...", stage="UNDERSTAND", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "UNDERSTAND", "extract_ocr", "ATLAS", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("UNDERSTAND", {})
-        if bigtool:
-            await emit_log_message(thread_id, "info", f"🔧 Selected OCR: {bigtool.get('tool_name', 'default')} via ATLAS")
+        tool_name = bigtool.get('tool_name', 'extract_ocr')
         
         parsed = result.get("parsed_invoice", {})
         line_items = parsed.get("parsed_line_items", [])
         detected_pos = parsed.get("detected_pos", [])
         
-        await emit_log_message(thread_id, "info", f"📄 OCR extracted invoice text")
-        await emit_log_message(thread_id, "info", f"📝 Parsed {len(line_items)} line items")
-        await emit_log_message(thread_id, "info", f"🔗 Detected {len(detected_pos)} PO references: {detected_pos[:3]}..." if len(detected_pos) > 3 else f"🔗 Detected PO refs: {detected_pos}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "UNDERSTAND", tool_name, "ATLAS",
+            params={"raw_id": raw_id},
+            result={"line_items_count": len(line_items), "pos_count": len(detected_pos)},
+            status="completed"
+        )
+        
+        if bigtool:
+            await emit_log_message(thread_id, "info", f"🔧 Selected OCR: {tool_name} via ATLAS", stage="UNDERSTAND", log_type="tool_result")
+        
+        await emit_log_message(thread_id, "info", f"📄 OCR extracted invoice text", stage="UNDERSTAND", log_type="result")
+        await emit_log_message(thread_id, "info", f"📝 Parsed {len(line_items)} line items", stage="UNDERSTAND", log_type="result")
+        await emit_log_message(thread_id, "info", f"🔗 Detected {len(detected_pos)} PO references: {detected_pos[:3]}..." if len(detected_pos) > 3 else f"🔗 Detected PO refs: {detected_pos}", stage="UNDERSTAND", log_type="result")
         
         await emit_stage_completed(thread_id, "UNDERSTAND", {
             "line_items": len(line_items),
@@ -131,7 +160,7 @@ async def understand_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "UNDERSTAND", str(e))
-        await emit_log_message(thread_id, "error", f"❌ UNDERSTAND failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ UNDERSTAND failed: {str(e)}", stage="UNDERSTAND", log_type="error")
         raise
 
 
@@ -147,26 +176,40 @@ async def prepare_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("🛠️ PREPARE: Normalizing and enriching vendor data")
     await emit_stage_started(thread_id, "PREPARE", {})
-    await emit_log_message(thread_id, "info", "🛠️ Starting vendor preparation...")
+    await emit_log_message(thread_id, "info", "🛠️ Starting vendor preparation...", stage="PREPARE", log_type="info")
     
     try:
         agent = AgentRegistry.get("PREPARE")
         
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting enrichment provider...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting enrichment provider...", stage="PREPARE", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "PREPARE", "enrich_vendor", "ATLAS", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("PREPARE", {})
-        if bigtool:
-            await emit_log_message(thread_id, "info", f"🔧 Selected: {bigtool.get('tool_name', 'default')} via ATLAS")
+        tool_name = bigtool.get('tool_name', 'enrich_vendor')
         
         vendor = result.get("vendor_profile", {})
         flags = result.get("flags", {})
         
-        await emit_log_message(thread_id, "info", f"👤 Normalized vendor: {vendor.get('normalized_name')}")
-        await emit_log_message(thread_id, "info", f"🏷️ Tax ID: {vendor.get('tax_id', 'N/A')}")
-        await emit_log_message(thread_id, "info", f"📊 Risk score: {vendor.get('risk_score', 0):.2f}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "PREPARE", tool_name, "ATLAS",
+            params={"vendor_name": vendor.get("original_name")},
+            result={"normalized_name": vendor.get("normalized_name"), "risk_score": vendor.get("risk_score")},
+            status="completed"
+        )
+        
+        if bigtool:
+            await emit_log_message(thread_id, "info", f"🔧 Selected: {tool_name} via ATLAS", stage="PREPARE", log_type="tool_result")
+        
+        await emit_log_message(thread_id, "info", f"👤 Normalized vendor: {vendor.get('normalized_name')}", stage="PREPARE", log_type="result")
+        await emit_log_message(thread_id, "info", f"🏷️ Tax ID: {vendor.get('tax_id', 'N/A')}", stage="PREPARE", log_type="result")
+        await emit_log_message(thread_id, "info", f"📊 Risk score: {vendor.get('risk_score', 0):.2f}", stage="PREPARE", log_type="result")
         if flags:
-            await emit_log_message(thread_id, "info", f"🚩 Flags computed: {list(flags.keys())}")
+            await emit_log_message(thread_id, "info", f"🚩 Flags computed: {list(flags.keys())}", stage="PREPARE", log_type="result")
         
         await emit_stage_completed(thread_id, "PREPARE", {
             "vendor": vendor.get("normalized_name"),
@@ -177,7 +220,7 @@ async def prepare_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "PREPARE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ PREPARE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ PREPARE failed: {str(e)}", stage="PREPARE", log_type="error")
         raise
 
 
@@ -194,25 +237,39 @@ async def retrieve_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info(f"📚 RETRIEVE: Fetching ERP data for {len(detected_pos)} PO refs")
     await emit_stage_started(thread_id, "RETRIEVE", {})
-    await emit_log_message(thread_id, "info", "📚 Connecting to ERP via ATLAS...")
+    await emit_log_message(thread_id, "info", "📚 Connecting to ERP via ATLAS...", stage="RETRIEVE", log_type="info")
     
     try:
         agent = AgentRegistry.get("RETRIEVE")
         
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting ERP connector...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting ERP connector...", stage="RETRIEVE", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "RETRIEVE", "fetch_erp", "ATLAS", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("RETRIEVE", {})
-        if bigtool:
-            await emit_log_message(thread_id, "info", f"🔧 Selected: {bigtool.get('tool_name', 'default')}")
+        tool_name = bigtool.get('tool_name', 'fetch_erp')
         
         pos = result.get("matched_pos", [])
         grns = result.get("matched_grns", [])
         history = result.get("history", [])
         
-        await emit_log_message(thread_id, "info", f"📝 Fetched {len(pos)} Purchase Orders")
-        await emit_log_message(thread_id, "info", f"📦 Fetched {len(grns)} Goods Received Notes")
-        await emit_log_message(thread_id, "info", f"📜 Fetched {len(history)} historical invoices")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "RETRIEVE", tool_name, "ATLAS",
+            params={"po_refs": detected_pos},
+            result={"pos_found": len(pos), "grns_found": len(grns), "history_count": len(history)},
+            status="completed"
+        )
+        
+        if bigtool:
+            await emit_log_message(thread_id, "info", f"🔧 Selected: {tool_name}", stage="RETRIEVE", log_type="tool_result")
+        
+        await emit_log_message(thread_id, "info", f"📝 Fetched {len(pos)} Purchase Orders", stage="RETRIEVE", log_type="result")
+        await emit_log_message(thread_id, "info", f"📦 Fetched {len(grns)} Goods Received Notes", stage="RETRIEVE", log_type="result")
+        await emit_log_message(thread_id, "info", f"📜 Fetched {len(history)} historical invoices", stage="RETRIEVE", log_type="result")
         
         await emit_stage_completed(thread_id, "RETRIEVE", {
             "pos_found": len(pos),
@@ -224,7 +281,7 @@ async def retrieve_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "RETRIEVE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ RETRIEVE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ RETRIEVE failed: {str(e)}", stage="RETRIEVE", log_type="error")
         raise
 
 
@@ -241,10 +298,14 @@ async def match_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("⚖️ MATCH_TWO_WAY: Computing invoice-PO match score")
     await emit_stage_started(thread_id, "MATCH_TWO_WAY", {})
-    await emit_log_message(thread_id, "info", "⚖️ Starting 2-way matching (Invoice ↔ PO)...")
+    await emit_log_message(thread_id, "info", "⚖️ Starting 2-way matching (Invoice ↔ PO)...", stage="MATCH_TWO_WAY", log_type="info")
     
     try:
         agent = AgentRegistry.get("MATCH_TWO_WAY")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "MATCH_TWO_WAY", "compute_match", "COMMON", status="started")
+        
         result = await agent.execute(state)
         
         match_score = result.get("match_score", 0)
@@ -253,15 +314,23 @@ async def match_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         matched_fields = evidence.get("matched_fields", [])
         mismatched_fields = evidence.get("mismatched_fields", [])
         
-        await emit_log_message(thread_id, "info", f"📊 Match score: {match_score:.2%}")
-        await emit_log_message(thread_id, "info", f"✅ Matched fields: {matched_fields}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "MATCH_TWO_WAY", "compute_match", "COMMON",
+            params={"invoice_amount": invoice_amount},
+            result={"match_score": match_score, "match_result": match_result},
+            status="completed"
+        )
+        
+        await emit_log_message(thread_id, "info", f"📊 Match score: {match_score:.2%}", stage="MATCH_TWO_WAY", log_type="result")
+        await emit_log_message(thread_id, "info", f"✅ Matched fields: {matched_fields}", stage="MATCH_TWO_WAY", log_type="result")
         if mismatched_fields:
-            await emit_log_message(thread_id, "warning", f"⚠️ Mismatched fields: {mismatched_fields}")
+            await emit_log_message(thread_id, "warning", f"⚠️ Mismatched fields: {mismatched_fields}", stage="MATCH_TWO_WAY", log_type="warning")
         
         if match_result == "MATCHED":
-            await emit_log_message(thread_id, "info", f"✅ Match PASSED - Proceeding to reconciliation")
+            await emit_log_message(thread_id, "info", f"✅ Match PASSED - Proceeding to reconciliation", stage="MATCH_TWO_WAY", log_type="decision")
         else:
-            await emit_log_message(thread_id, "warning", f"⚠️ Match FAILED - Will require human review")
+            await emit_log_message(thread_id, "warning", f"⚠️ Match FAILED - Will require human review", stage="MATCH_TWO_WAY", log_type="decision")
         
         await emit_stage_completed(thread_id, "MATCH_TWO_WAY", {
             "match_score": match_score,
@@ -272,7 +341,7 @@ async def match_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "MATCH_TWO_WAY", str(e))
-        await emit_log_message(thread_id, "error", f"❌ MATCH failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ MATCH failed: {str(e)}", stage="MATCH_TWO_WAY", log_type="error")
         raise
 
 
@@ -290,22 +359,34 @@ async def checkpoint_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("⏸️ CHECKPOINT_HITL: Creating human review checkpoint")
     await emit_stage_started(thread_id, "CHECKPOINT_HITL", {})
-    await emit_log_message(thread_id, "warning", "⏸️ Match failed - Creating HITL checkpoint...")
+    await emit_log_message(thread_id, "warning", "⏸️ Match failed - Creating HITL checkpoint...", stage="CHECKPOINT_HITL", log_type="info")
     
     try:
         agent = AgentRegistry.get("CHECKPOINT_HITL")
         
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting DB tool for checkpoint...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting DB tool for checkpoint...", stage="CHECKPOINT_HITL", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "CHECKPOINT_HITL", "create_checkpoint", "COMMON", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("CHECKPOINT_HITL", {})
         checkpoint_id = result.get("hitl_checkpoint_id")
         review_url = result.get("review_url")
         
-        await emit_log_message(thread_id, "info", f"💾 Checkpoint created: {checkpoint_id}")
-        await emit_log_message(thread_id, "info", "📝 Added to Human Review queue")
-        await emit_log_message(thread_id, "info", f"🔗 Review URL: {review_url}")
-        await emit_log_message(thread_id, "warning", "⏸️ Workflow PAUSED - Awaiting human decision")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "CHECKPOINT_HITL", "create_checkpoint", "COMMON",
+            params={"match_score": match_score},
+            result={"checkpoint_id": checkpoint_id},
+            status="completed"
+        )
+        
+        await emit_log_message(thread_id, "info", f"💾 Checkpoint created: {checkpoint_id}", stage="CHECKPOINT_HITL", log_type="result")
+        await emit_log_message(thread_id, "info", "📝 Added to Human Review queue", stage="CHECKPOINT_HITL", log_type="result")
+        await emit_log_message(thread_id, "info", f"🔗 Review URL: {review_url}", stage="CHECKPOINT_HITL", log_type="result")
+        await emit_log_message(thread_id, "warning", "⏸️ Workflow PAUSED - Awaiting human decision", stage="CHECKPOINT_HITL", log_type="hitl")
         
         await emit_stage_completed(thread_id, "CHECKPOINT_HITL", {
             "checkpoint_id": checkpoint_id,
@@ -316,7 +397,7 @@ async def checkpoint_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "CHECKPOINT_HITL", str(e))
-        await emit_log_message(thread_id, "error", f"❌ CHECKPOINT failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ CHECKPOINT failed: {str(e)}", stage="CHECKPOINT_HITL", log_type="error")
         raise
 
 
@@ -395,10 +476,14 @@ async def reconcile_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("📘 RECONCILE: Building accounting entries")
     await emit_stage_started(thread_id, "RECONCILE", {})
-    await emit_log_message(thread_id, "info", "📘 Building accounting entries...")
+    await emit_log_message(thread_id, "info", "📘 Building accounting entries...", stage="RECONCILE", log_type="info")
     
     try:
         agent = AgentRegistry.get("RECONCILE")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "RECONCILE", "build_accounting_entries", "COMMON", status="started")
+        
         result = await agent.execute(state)
         
         entries = result.get("accounting_entries", [])
@@ -407,10 +492,18 @@ async def reconcile_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         total_debit = sum(e.get("amount", 0) for e in entries if e.get("type") == "DEBIT")
         total_credit = sum(e.get("amount", 0) for e in entries if e.get("type") == "CREDIT")
         
-        await emit_log_message(thread_id, "info", f"📊 Created {len(entries)} accounting entries")
-        await emit_log_message(thread_id, "info", f"🟢 Total Debits: ${total_debit:,.2f}")
-        await emit_log_message(thread_id, "info", f"🔴 Total Credits: ${total_credit:,.2f}")
-        await emit_log_message(thread_id, "info", f"⚖️ Balance: ${total_debit - total_credit:,.2f}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "RECONCILE", "build_accounting_entries", "COMMON",
+            params={"invoice_amount": invoice_amount},
+            result={"entries_count": len(entries), "total_debit": total_debit, "total_credit": total_credit},
+            status="completed"
+        )
+        
+        await emit_log_message(thread_id, "info", f"📊 Created {len(entries)} accounting entries", stage="RECONCILE", log_type="result")
+        await emit_log_message(thread_id, "info", f"🟢 Total Debits: ${total_debit:,.2f}", stage="RECONCILE", log_type="result")
+        await emit_log_message(thread_id, "info", f"🔴 Total Credits: ${total_credit:,.2f}", stage="RECONCILE", log_type="result")
+        await emit_log_message(thread_id, "info", f"⚖️ Balance: ${total_debit - total_credit:,.2f}", stage="RECONCILE", log_type="result")
         
         await emit_stage_completed(thread_id, "RECONCILE", {
             "entries_count": len(entries),
@@ -421,7 +514,7 @@ async def reconcile_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "RECONCILE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ RECONCILE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ RECONCILE failed: {str(e)}", stage="RECONCILE", log_type="error")
         raise
 
 
@@ -438,22 +531,34 @@ async def approve_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("🔄 APPROVE: Applying approval policy")
     await emit_stage_started(thread_id, "APPROVE", {})
-    await emit_log_message(thread_id, "info", f"🔄 Applying approval policy for ${invoice_amount:,.2f}...")
+    await emit_log_message(thread_id, "info", f"🔄 Applying approval policy for ${invoice_amount:,.2f}...", stage="APPROVE", log_type="info")
     
     try:
         agent = AgentRegistry.get("APPROVE")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "APPROVE", "apply_approval_policy", "COMMON", status="started")
+        
         result = await agent.execute(state)
         
         approval_status = result.get("approval_status", "UNKNOWN")
         approver_id = result.get("approver_id", "system")
         
-        if approval_status == "APPROVED":
-            await emit_log_message(thread_id, "info", f"✅ Auto-approved by policy")
-        elif approval_status == "ESCALATED":
-            await emit_log_message(thread_id, "warning", f"⚠️ Escalated for manual approval")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "APPROVE", "apply_approval_policy", "COMMON",
+            params={"invoice_amount": invoice_amount},
+            result={"approval_status": approval_status, "approver_id": approver_id},
+            status="completed"
+        )
         
-        await emit_log_message(thread_id, "info", f"👤 Approver: {approver_id}")
-        await emit_log_message(thread_id, "info", f"📋 Status: {approval_status}")
+        if approval_status == "APPROVED":
+            await emit_log_message(thread_id, "info", f"✅ Auto-approved by policy", stage="APPROVE", log_type="decision")
+        elif approval_status == "ESCALATED":
+            await emit_log_message(thread_id, "warning", f"⚠️ Escalated for manual approval", stage="APPROVE", log_type="decision")
+        
+        await emit_log_message(thread_id, "info", f"👤 Approver: {approver_id}", stage="APPROVE", log_type="result")
+        await emit_log_message(thread_id, "info", f"📋 Status: {approval_status}", stage="APPROVE", log_type="result")
         
         await emit_stage_completed(thread_id, "APPROVE", {
             "approval_status": approval_status,
@@ -463,7 +568,7 @@ async def approve_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "APPROVE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ APPROVE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ APPROVE failed: {str(e)}", stage="APPROVE", log_type="error")
         raise
 
 
@@ -480,21 +585,34 @@ async def posting_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("🏃 POSTING: Posting to ERP and scheduling payment")
     await emit_stage_started(thread_id, "POSTING", {})
-    await emit_log_message(thread_id, "info", "🏃 Posting entries to ERP via ATLAS...")
+    await emit_log_message(thread_id, "info", "🏃 Posting entries to ERP via ATLAS...", stage="POSTING", log_type="info")
     
     try:
         agent = AgentRegistry.get("POSTING")
         
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting ERP posting tool...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting ERP posting tool...", stage="POSTING", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "POSTING", "post_erp", "ATLAS", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("POSTING", {})
+        tool_name = bigtool.get('tool_name', 'post_erp')
         erp_txn_id = result.get("erp_txn_id")
         payment_id = result.get("scheduled_payment_id")
         
-        await emit_log_message(thread_id, "info", f"📝 Posted to ERP - Transaction: {erp_txn_id}")
-        await emit_log_message(thread_id, "info", f"💳 Payment scheduled - ID: {payment_id}")
-        await emit_log_message(thread_id, "info", f"💰 Amount: ${invoice_amount:,.2f}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "POSTING", tool_name, "ATLAS",
+            params={"invoice_amount": invoice_amount},
+            result={"erp_txn_id": erp_txn_id, "payment_id": payment_id},
+            status="completed"
+        )
+        
+        await emit_log_message(thread_id, "info", f"📝 Posted to ERP - Transaction: {erp_txn_id}", stage="POSTING", log_type="result")
+        await emit_log_message(thread_id, "info", f"💳 Payment scheduled - ID: {payment_id}", stage="POSTING", log_type="result")
+        await emit_log_message(thread_id, "info", f"💰 Amount: ${invoice_amount:,.2f}", stage="POSTING", log_type="result")
         
         await emit_stage_completed(thread_id, "POSTING", {
             "erp_txn_id": erp_txn_id,
@@ -505,7 +623,7 @@ async def posting_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "POSTING", str(e))
-        await emit_log_message(thread_id, "error", f"❌ POSTING failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ POSTING failed: {str(e)}", stage="POSTING", log_type="error")
         raise
 
 
@@ -522,21 +640,34 @@ async def notify_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("✉️ NOTIFY: Sending notifications")
     await emit_stage_started(thread_id, "NOTIFY", {})
-    await emit_log_message(thread_id, "info", "✉️ Sending notifications via ATLAS...")
+    await emit_log_message(thread_id, "info", "✉️ Sending notifications via ATLAS...", stage="NOTIFY", log_type="info")
     
     try:
         agent = AgentRegistry.get("NOTIFY")
         
-        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting notification channel...")
+        await emit_log_message(thread_id, "info", "🔧 BigtoolPicker: Selecting notification channel...", stage="NOTIFY", log_type="tool_selection")
+        
+        # Emit tool call started
+        await emit_tool_call(thread_id, "NOTIFY", "send_notification", "ATLAS", status="started")
+        
         result = await agent.execute(state)
         
         bigtool = result.get("bigtool_selections", {}).get("NOTIFY", {})
+        tool_name = bigtool.get('tool_name', 'send_notification')
         parties = result.get("notified_parties", [])
         status = result.get("notify_status", {})
         
-        await emit_log_message(thread_id, "info", f"📧 Notified vendor: {vendor}")
-        await emit_log_message(thread_id, "info", f"👥 Notified finance team")
-        await emit_log_message(thread_id, "info", f"📬 Total parties notified: {len(parties)}")
+        # Emit tool call completed
+        await emit_tool_call(
+            thread_id, "NOTIFY", tool_name, "ATLAS",
+            params={"vendor": vendor},
+            result={"parties_notified": len(parties)},
+            status="completed"
+        )
+        
+        await emit_log_message(thread_id, "info", f"📧 Notified vendor: {vendor}", stage="NOTIFY", log_type="result")
+        await emit_log_message(thread_id, "info", f"👥 Notified finance team", stage="NOTIFY", log_type="result")
+        await emit_log_message(thread_id, "info", f"📬 Total parties notified: {len(parties)}", stage="NOTIFY", log_type="result")
         
         await emit_stage_completed(thread_id, "NOTIFY", {
             "parties_notified": len(parties),
@@ -546,7 +677,7 @@ async def notify_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "NOTIFY", str(e))
-        await emit_log_message(thread_id, "error", f"❌ NOTIFY failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ NOTIFY failed: {str(e)}", stage="NOTIFY", log_type="error")
         raise
 
 
@@ -564,7 +695,7 @@ async def complete_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("✅ COMPLETE: Finalizing workflow")
     await emit_stage_started(thread_id, "COMPLETE", {})
-    await emit_log_message(thread_id, "info", "✅ Finalizing workflow...")
+    await emit_log_message(thread_id, "info", "✅ Finalizing workflow...", stage="COMPLETE", log_type="info")
     
     try:
         agent = AgentRegistry.get("COMPLETE")
@@ -572,10 +703,10 @@ async def complete_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         
         final_payload = result.get("final_payload", {})
         
-        await emit_log_message(thread_id, "info", f"📝 Invoice ID: {invoice_id}")
-        await emit_log_message(thread_id, "info", f"🏛️ ERP Transaction: {erp_txn}")
-        await emit_log_message(thread_id, "info", "💾 Final payload generated")
-        await emit_log_message(thread_id, "info", "📝 Audit log complete")
+        await emit_log_message(thread_id, "info", f"📝 Invoice ID: {invoice_id}", stage="COMPLETE", log_type="result")
+        await emit_log_message(thread_id, "info", f"🏛️ ERP Transaction: {erp_txn}", stage="COMPLETE", log_type="result")
+        await emit_log_message(thread_id, "info", "💾 Final payload generated", stage="COMPLETE", log_type="result")
+        await emit_log_message(thread_id, "info", "📝 Audit log complete", stage="COMPLETE", log_type="result")
         
         await emit_stage_completed(thread_id, "COMPLETE", {
             "status": "COMPLETED",
@@ -583,7 +714,7 @@ async def complete_node(state: InvoiceWorkflowState) -> dict[str, Any]:
             "erp_txn_id": erp_txn
         })
         
-        await emit_log_message(thread_id, "info", "🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
+        await emit_log_message(thread_id, "info", "🎉 WORKFLOW COMPLETED SUCCESSFULLY!", stage="COMPLETE", log_type="success")
         
         # Emit workflow complete event
         await emit_workflow_complete(thread_id, "COMPLETED", {
@@ -595,7 +726,7 @@ async def complete_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         return result
     except Exception as e:
         await emit_stage_failed(thread_id, "COMPLETE", str(e))
-        await emit_log_message(thread_id, "error", f"❌ COMPLETE failed: {str(e)}")
+        await emit_log_message(thread_id, "error", f"❌ COMPLETE failed: {str(e)}", stage="COMPLETE", log_type="error")
         raise
 
 
@@ -613,9 +744,9 @@ async def manual_handoff_node(state: InvoiceWorkflowState) -> dict[str, Any]:
     
     logger.info("⚠️ MANUAL_HANDOFF: Invoice rejected, requiring manual handling")
     await emit_stage_started(thread_id, "MANUAL_HANDOFF", {})
-    await emit_log_message(thread_id, "warning", "⚠️ Invoice REJECTED during human review")
-    await emit_log_message(thread_id, "info", f"👤 Reviewer: {reviewer}")
-    await emit_log_message(thread_id, "info", f"📝 Notes: {notes}")
+    await emit_log_message(thread_id, "warning", "⚠️ Invoice REJECTED during human review", stage="MANUAL_HANDOFF", log_type="decision")
+    await emit_log_message(thread_id, "info", f"👤 Reviewer: {reviewer}", stage="MANUAL_HANDOFF", log_type="result")
+    await emit_log_message(thread_id, "info", f"📝 Notes: {notes}", stage="MANUAL_HANDOFF", log_type="result")
     
     result = {
         "current_stage": "MANUAL_HANDOFF",
@@ -640,9 +771,9 @@ async def manual_handoff_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         }]
     }
     
-    await emit_log_message(thread_id, "warning", "📤 Handing off for manual processing")
+    await emit_log_message(thread_id, "warning", "📤 Handing off for manual processing", stage="MANUAL_HANDOFF", log_type="result")
     await emit_stage_completed(thread_id, "MANUAL_HANDOFF", {"status": "REQUIRES_MANUAL_HANDLING"})
-    await emit_log_message(thread_id, "warning", "⚠️ Workflow ended - REQUIRES MANUAL HANDLING")
+    await emit_log_message(thread_id, "warning", "⚠️ Workflow ended - REQUIRES MANUAL HANDLING", stage="MANUAL_HANDOFF", log_type="warning")
     await emit_workflow_complete(thread_id, "REQUIRES_MANUAL_HANDLING", result.get("final_payload"))
     
     return result
