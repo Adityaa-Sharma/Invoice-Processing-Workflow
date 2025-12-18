@@ -146,71 +146,92 @@ class ErpFetchAgent(BaseAgent):
         """
         Mock fetch purchase orders from ERP.
         
-        Returns realistic mock PO data that may or may NOT match the invoice.
-        This allows testing of both MATCHED and FAILED scenarios:
-        - If invoice vendor starts with 'test' or 'acme' or 'good' → returns matching PO
-        - Otherwise → returns PO with different values (triggers HITL)
+        Returns realistic mock PO data based on invoice amount ranges:
+        - Small invoices (<$5000): Exact match → PASS
+        - Medium invoices ($5000-$20000): Slight variance (within tolerance) → PASS  
+        - Large invoices (>$20000): Quantity/price discrepancies → HITL
+        
+        This simulates real-world scenarios where large invoices need more scrutiny.
         """
         pos = []
-        vendor_name = invoice.get("vendor_name", "").lower().strip()
         invoice_amount = invoice.get("amount", 0)
+        invoice_items = invoice.get("line_items", [])
+        invoice_id = invoice.get("invoice_id", "INV-001")
         
-        # Known vendor PREFIXES that will MATCH (for testing successful flow)
-        # Use prefix matching to avoid false positives like "Unknown Corp"
-        matching_prefixes = ["test", "acme", "good", "valid", "approved"]
-        is_known_vendor = any(vendor_name.startswith(prefix) for prefix in matching_prefixes)
-        
-        self.logger.info(f"ERP Fetch: vendor='{vendor_name}', is_known={is_known_vendor}")
-        
-        if po_refs:
-            for po_ref in po_refs:
-                if is_known_vendor:
-                    # Return matching PO for known test vendors
-                    pos.append({
-                        "po_number": po_ref,
-                        "vendor_name": invoice.get("vendor_name", ""),
-                        "total_amount": invoice_amount,
-                        "currency": invoice.get("currency", "USD"),
-                        "status": "APPROVED",
-                        "line_items": invoice.get("line_items", []),
-                        "created_date": "2024-01-15"
-                    })
-                else:
-                    # Return MISMATCHED PO for unknown vendors (triggers HITL)
-                    pos.append({
-                        "po_number": po_ref,
-                        "vendor_name": "Authorized Vendor Inc",  # Different vendor
-                        "total_amount": invoice_amount * 0.5,     # 50% of invoice (fails match)
-                        "currency": "EUR",                        # Different currency
-                        "status": "APPROVED",
-                        "line_items": [{"desc": "Standard Item", "qty": 1, "unit_price": 100, "total": 100}],
-                        "created_date": "2024-01-15"
-                    })
+        # Determine match scenario based on invoice amount (realistic business logic)
+        if invoice_amount < 5000:
+            # Small invoices: Auto-approve (exact match)
+            match_scenario = "exact"
+        elif invoice_amount <= 20000:
+            # Medium invoices: Minor variance within tolerance
+            match_scenario = "within_tolerance"
         else:
-            # No PO refs detected - generate mock based on vendor
-            invoice_id = invoice.get("invoice_id", "INV-001")
+            # Large invoices: Discrepancies requiring human review
+            match_scenario = "discrepancy"
+        
+        self.logger.info(f"ERP Fetch: amount=${invoice_amount}, scenario='{match_scenario}'")
+        
+        po_number = po_refs[0] if po_refs else f"PO-{invoice_id.replace('INV-', '')}"
+        
+        if match_scenario == "exact":
+            # Perfect match - same amounts, quantities, prices
+            pos.append({
+                "po_number": po_number,
+                "vendor_name": invoice.get("vendor_name", ""),
+                "total_amount": invoice_amount,
+                "currency": invoice.get("currency", "USD"),
+                "status": "APPROVED",
+                "line_items": [
+                    {
+                        "desc": item.get("desc", "Item"),
+                        "qty": item.get("qty", 1),
+                        "unit_price": item.get("unit_price", 0),
+                        "total": item.get("total", 0)
+                    } for item in invoice_items
+                ],
+                "created_date": "2024-01-15"
+            })
             
-            if is_known_vendor:
-                pos.append({
-                    "po_number": f"PO-{invoice_id.replace('INV-', '')}",
-                    "vendor_name": invoice.get("vendor_name", ""),
-                    "total_amount": invoice_amount,
-                    "currency": invoice.get("currency", "USD"),
-                    "status": "APPROVED",
-                    "line_items": invoice.get("line_items", []),
-                    "created_date": "2024-01-15"
-                })
-            else:
-                # Unknown vendor + no PO = likely fraud/error → HITL
-                pos.append({
-                    "po_number": f"PO-UNMATCHED-{invoice_id[-4:]}",
-                    "vendor_name": "Different Vendor LLC",
-                    "total_amount": 1000.00,  # Fixed amount that won't match
-                    "currency": "EUR",        # Different currency
-                    "status": "PENDING",
-                    "line_items": [],
-                    "created_date": "2024-01-15"
-                })
+        elif match_scenario == "within_tolerance":
+            # Minor variance (2-3%) - should still pass with tolerance of 5%
+            variance_factor = 0.97  # 3% less than invoice
+            pos.append({
+                "po_number": po_number,
+                "vendor_name": invoice.get("vendor_name", ""),
+                "total_amount": round(invoice_amount * variance_factor, 2),
+                "currency": invoice.get("currency", "USD"),
+                "status": "APPROVED",
+                "line_items": [
+                    {
+                        "desc": item.get("desc", "Item"),
+                        "qty": item.get("qty", 1),  # Same quantities
+                        "unit_price": round(item.get("unit_price", 0) * variance_factor, 2),
+                        "total": round(item.get("total", 0) * variance_factor, 2)
+                    } for item in invoice_items
+                ],
+                "created_date": "2024-01-15"
+            })
+            
+        else:  # discrepancy
+            # Significant differences - triggers HITL
+            # Scenario: PO was for fewer items or lower prices
+            pos.append({
+                "po_number": po_number,
+                "vendor_name": invoice.get("vendor_name", ""),
+                "total_amount": round(invoice_amount * 0.75, 2),  # 25% less (exceeds 5% tolerance)
+                "currency": invoice.get("currency", "USD"),
+                "status": "APPROVED",
+                "line_items": [
+                    {
+                        "desc": item.get("desc", "Item"),
+                        "qty": max(1, item.get("qty", 1) - 2),  # Fewer items ordered
+                        "unit_price": round(item.get("unit_price", 0) * 0.85, 2),  # Lower agreed price
+                        "total": round(item.get("total", 0) * 0.75, 2)
+                    } for item in invoice_items
+                ],
+                "created_date": "2024-01-15",
+                "notes": "Original PO was for smaller quantity at negotiated discount"
+            })
         
         return pos
     

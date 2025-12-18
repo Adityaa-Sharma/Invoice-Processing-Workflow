@@ -41,10 +41,12 @@ def get_llm() -> ChatGroq:
         return _llm_instance
     
     if not settings.GROQ_API_KEY:
-        logger.warning("GROQ_API_KEY not set, LLM features disabled")
+        logger.warning("⚠️ GROQ_API_KEY not set! LLM calls will use MOCK FALLBACK (no real AI)")
+        logger.warning("Set GROQ_API_KEY in .env file to enable real LLM calls")
         return None
     
-    logger.info(f"Initializing Groq LLM: {settings.LLM_MODEL}")
+    api_key_preview = settings.GROQ_API_KEY[:8] + "..." if len(settings.GROQ_API_KEY) > 8 else "***"
+    logger.info(f"✅ Initializing Groq LLM: {settings.LLM_MODEL} (API key: {api_key_preview})")
     
     _llm_instance = ChatGroq(
         model=settings.LLM_MODEL,
@@ -77,12 +79,13 @@ async def invoke_agent(
     llm = get_llm()
     
     if llm is None:
-        logger.warning(f"LLM not available for stage {stage}, using fallback")
+        logger.warning(f"⚠️ LLM MOCK FALLBACK for stage {stage} (GROQ_API_KEY not set)")
         return {
             "success": False,
             "stage": stage,
-            "error": "LLM not configured",
-            "fallback": True
+            "error": "LLM not configured - using mock fallback",
+            "fallback": True,
+            "response": f"Mock LLM response for {stage}"
         }
     
     try:
@@ -107,8 +110,9 @@ Analyze the data and provide your structured response."""
             HumanMessage(content=user_prompt)
         ]
         
-        logger.info(f"Invoking LLM for stage: {stage}")
+        logger.info(f"🤖 REAL LLM CALL for stage: {stage} (model: {settings.LLM_MODEL})")
         response = await llm.ainvoke(messages)
+        logger.info(f"✅ LLM responded for stage: {stage} ({len(response.content)} chars)")
         
         return {
             "success": True,
@@ -147,9 +151,10 @@ async def select_tool_with_reasoning(
     
     if llm is None:
         # Fallback: return first available tool
+        logger.warning(f"⚠️ BigtoolPicker MOCK FALLBACK for {capability} (no LLM, using first tool: {pool[0] if pool else 'none'})")
         return {
             "selected_tool": pool[0] if pool else None,
-            "reason": "LLM not available, using first tool",
+            "reason": "LLM not available - mock fallback, using first tool",
             "fallback": True
         }
     
@@ -170,7 +175,9 @@ SELECTED: <tool_name>
 REASON: <one sentence explanation>"""
 
         messages = [HumanMessage(content=prompt)]
+        logger.info(f"🤖 REAL LLM CALL for BigtoolPicker: {capability} (pool: {pool})")
         response = await llm.ainvoke(messages)
+        logger.info(f"✅ LLM tool selection response: {response.content[:100]}...")
         
         # Parse response
         lines = response.content.strip().split('\n')
