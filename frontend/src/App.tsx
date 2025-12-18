@@ -10,6 +10,7 @@ export default function App() {
   const isRunning = state.status === 'running';
   const isHitl = state.status === 'hitl';
   const isDone = state.status === 'done';
+  const isError = state.status === 'error';
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
@@ -39,6 +40,16 @@ export default function App() {
                   <h3 className="text-xl font-bold text-green-700 mt-4">Workflow Complete!</h3>
                   <p className="text-green-600 mb-4">Invoice processed successfully</p>
                   <Button onClick={reset}>Process Another</Button>
+                </div>
+              </Card>
+            ) : isError ? (
+              <Card className="bg-red-50 border-2 border-red-400">
+                <div className="text-center py-8">
+                  <span className="text-5xl">⚠️</span>
+                  <h3 className="text-xl font-bold text-red-700 mt-4">Manual Handling Required</h3>
+                  <p className="text-red-600 mb-2">Invoice was rejected during human review</p>
+                  <p className="text-sm text-red-500 mb-4">This invoice requires manual processing by the finance team.</p>
+                  <Button onClick={reset} className="bg-red-600 hover:bg-red-700">Process Another</Button>
                 </div>
               </Card>
             ) : isHitl && state.hitlData ? (

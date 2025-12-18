@@ -14,6 +14,7 @@ export const STAGES = [
   { id: 'POSTING', name: 'Post to ERP', icon: '🏃', desc: 'Post to ERP & schedule payment' },
   { id: 'NOTIFY', name: 'Notify', icon: '✉️', desc: 'Notify vendor & finance team' },
   { id: 'COMPLETE', name: 'Complete', icon: '✅', desc: 'Output final payload' },
+  { id: 'MANUAL_HANDOFF', name: 'Manual Handoff', icon: '⚠️', desc: 'Invoice rejected - requires manual handling' },
 ] as const;
 
 export type StageId = typeof STAGES[number]['id'];

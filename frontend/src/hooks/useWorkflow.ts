@@ -135,14 +135,17 @@ export function useWorkflow() {
               newState.stageData = { ...s.stageData, [stage]: data.data };
             }
 
-            // Handle workflow completion - check both workflow_complete status AND COMPLETE stage
-            if (stageStatus === 'workflow_complete' || (stage === 'COMPLETE' && stageStatus === 'completed')) {
+            // Handle workflow completion - check workflow_complete, COMPLETE stage, or MANUAL_HANDOFF
+            if (stageStatus === 'workflow_complete' || 
+                (stage === 'COMPLETE' && stageStatus === 'completed') ||
+                (stage === 'MANUAL_HANDOFF' && stageStatus === 'completed')) {
               const finalStatus = data.data?.final_status || data.data?.status || 'COMPLETED';
               if (finalStatus === 'COMPLETED') {
                 newState.status = 'done';
-                newState.currentStage = 'COMPLETE'; // Ensure we show final stage
+                newState.currentStage = 'COMPLETE';
               } else if (finalStatus === 'REQUIRES_MANUAL_HANDLING') {
                 newState.status = 'error';
+                newState.currentStage = 'MANUAL_HANDOFF';
               }
               // Close SSE connection
               eventSource.close();

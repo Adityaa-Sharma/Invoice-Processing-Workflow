@@ -13,6 +13,8 @@ export function Pipeline({ currentStage, status }: Props) {
   const currentIdx = getStageIndex(currentStage);
   
   const getVariant = (idx: number, stageId: string): 'success' | 'error' | 'warning' | 'info' | 'pending' => {
+    // MANUAL_HANDOFF is always error when current
+    if (stageId === 'MANUAL_HANDOFF' && currentStage === 'MANUAL_HANDOFF') return 'error';
     if (status === 'error' && idx === currentIdx) return 'error';
     if (status === 'hitl' && (stageId === 'CHECKPOINT_HITL' || stageId === 'HITL_DECISION')) return 'warning';
     if (idx < currentIdx) return 'success';
@@ -22,6 +24,7 @@ export function Pipeline({ currentStage, status }: Props) {
   };
 
   const getStageStatus = (idx: number, stageId: string): string => {
+    if (stageId === 'MANUAL_HANDOFF' && currentStage === 'MANUAL_HANDOFF') return '✗';
     if (status === 'error' && idx === currentIdx) return '✗';
     if (status === 'hitl' && (stageId === 'CHECKPOINT_HITL' || stageId === 'HITL_DECISION')) return '⏸';
     if (idx < currentIdx) return '✓';
@@ -46,7 +49,7 @@ export function Pipeline({ currentStage, status }: Props) {
             key={stage.id}
             title={stage.desc}
             className={`p-2 rounded-lg text-center transition-all cursor-help ${
-              status === 'error' && idx === currentIdx ? 'ring-2 ring-red-400 bg-red-50' :
+              (status === 'error' && idx === currentIdx) || (stage.id === 'MANUAL_HANDOFF' && currentStage === 'MANUAL_HANDOFF') ? 'ring-2 ring-red-400 bg-red-50' :
               status === 'hitl' && (stage.id === 'CHECKPOINT_HITL' || stage.id === 'HITL_DECISION') ? 'ring-2 ring-amber-400 bg-amber-50' :
               idx === currentIdx && status === 'running' ? 'ring-2 ring-blue-400 bg-blue-50 animate-pulse' : 
               idx < currentIdx || (idx === currentIdx && status === 'done') ? 'bg-green-50' : 
