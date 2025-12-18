@@ -73,13 +73,19 @@ class MCPClient:
     """
     Unified MCP Client for communicating with COMMON and ATLAS servers.
     
-    Routes tool calls to the appropriate server based on TOOL_SERVER_MAP.
-    Falls back to mock responses if servers are not running (controlled by MOCK_FALLBACK_ENABLED).
+    Implements True MCP Protocol with:
+    - Dynamic tool discovery from servers
+    - Tool descriptions for LLM-based selection
+    - Automatic server routing based on discovered tools
+    
+    Falls back to mock responses if servers are not running.
     """
     
     _instance: Optional["MCPClient"] = None
     _servers_checked: bool = False
     _servers_available: dict[str, bool] = {"common": None, "atlas": None}
+    _discovered_tools: dict[str, dict] = {}  # Cache discovered tools
+    _tool_to_server: dict[str, str] = {}  # Dynamic tool → server mapping
     
     def __new__(cls):
         if cls._instance is None:
@@ -96,6 +102,7 @@ class MCPClient:
         self.atlas_url = ATLAS_SERVER_URL
         self._http_client: Optional[httpx.AsyncClient] = None
         self._initialized = True
+        self._tools_discovered = False
     
     @property
     def http_client(self) -> httpx.AsyncClient:
@@ -110,8 +117,101 @@ class MCPClient:
             await self._http_client.aclose()
             self._http_client = None
     
+    async def discover_tools(self, force: bool = False) -> dict[str, list[dict]]:
+        """
+        Discover available tools from MCP servers (True MCP Protocol).
+        
+        Fetches tool schemas with descriptions from both COMMON and ATLAS servers.
+        Results are cached for performance.
+        
+        Args:
+            force: Force re-discovery even if already cached
+            
+        Returns:
+            Dict with server names as keys and tool lists as values
+        """
+        if self._tools_discovered and not force:
+            return self._discovered_tools
+        
+        self.logger.info("🔍 Discovering tools from MCP servers (True MCP Protocol)...")
+        
+        discovered = {"common": [], "atlas": []}
+        
+        # Discover from COMMON server
+        try:
+            response = await self.http_client.get(f"{self.common_url}/tools", timeout=3.0)
+            if response.status_code == 200:
+                data = response.json()
+                tools = data.get("tools", []) if isinstance(data, dict) else data
+                discovered["common"] = tools
+                
+                # Build dynamic tool → server mapping
+                for tool in tools:
+                    tool_name = tool.get("name") if isinstance(tool, dict) else tool
+                    self._tool_to_server[tool_name] = "common"
+                
+                self.logger.info(f"✅ COMMON server: discovered {len(tools)} tools")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Could not discover tools from COMMON: {e}")
+        
+        # Discover from ATLAS server
+        try:
+            response = await self.http_client.get(f"{self.atlas_url}/tools", timeout=3.0)
+            if response.status_code == 200:
+                data = response.json()
+                tools = data.get("tools", []) if isinstance(data, dict) else data
+                discovered["atlas"] = tools
+                
+                # Build dynamic tool → server mapping
+                for tool in tools:
+                    tool_name = tool.get("name") if isinstance(tool, dict) else tool
+                    self._tool_to_server[tool_name] = "atlas"
+                
+                self.logger.info(f"✅ ATLAS server: discovered {len(tools)} tools")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Could not discover tools from ATLAS: {e}")
+        
+        self._discovered_tools = discovered
+        self._tools_discovered = True
+        
+        self.logger.info(f"📋 Total tools discovered: {len(self._tool_to_server)}")
+        return discovered
+    
+    def get_all_tools_with_descriptions(self) -> list[dict]:
+        """
+        Get all discovered tools with their descriptions.
+        
+        Used by LLM to intelligently select tools based on descriptions.
+        
+        Returns:
+            List of tool schemas with name, description, and inputSchema
+        """
+        all_tools = []
+        for server, tools in self._discovered_tools.items():
+            for tool in tools:
+                if isinstance(tool, dict):
+                    tool["server"] = server
+                    all_tools.append(tool)
+        return all_tools
+    
+    def get_tool_by_name(self, tool_name: str) -> Optional[dict]:
+        """Get a specific tool's schema by name."""
+        for tools in self._discovered_tools.values():
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("name") == tool_name:
+                    return tool
+        return None
+    
     def _get_server_url(self, tool_name: str) -> str:
-        """Get server URL for a tool."""
+        """Get server URL for a tool (uses dynamic discovery if available)."""
+        # First check dynamically discovered mapping
+        if tool_name in self._tool_to_server:
+            server = self._tool_to_server[tool_name]
+            if server == "atlas":
+                return self.atlas_url
+            return self.common_url
+        
+        # Fallback to static mapping
         server = TOOL_SERVER_MAP.get(tool_name, "common")
         if server == "atlas":
             return self.atlas_url

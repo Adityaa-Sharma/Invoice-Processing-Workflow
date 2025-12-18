@@ -72,18 +72,127 @@ async def health():
 
 @app.get("/tools")
 async def list_tools():
-    """List available tools."""
-    return [
-        "validate_invoice_schema",
-        "persist_invoice",
-        "persist_audit",
-        "parse_line_items",
-        "normalize_vendor",
-        "create_checkpoint",
-        "get_checkpoint",
-        "compute_match",
-        "build_entries"
-    ]
+    """
+    List available tools with descriptions (True MCP Protocol).
+    
+    Returns tool schemas that clients can use to dynamically discover
+    available capabilities and make intelligent tool selections.
+    """
+    return {
+        "tools": [
+            {
+                "name": "validate_invoice_schema",
+                "description": "Validate invoice payload against the expected schema. Use this to verify invoice data structure before processing. Returns validation errors if schema is invalid.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice": {"type": "object", "description": "Invoice data to validate"},
+                        "schema_type": {"type": "string", "description": "Type of schema to validate against"}
+                    },
+                    "required": ["invoice"]
+                }
+            },
+            {
+                "name": "persist_invoice",
+                "description": "Store invoice data to persistent storage. Use this to save raw invoice data for audit trail and later retrieval. Supports various storage backends.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice": {"type": "object", "description": "Invoice data to store"},
+                        "timestamp": {"type": "string", "description": "Ingestion timestamp"}
+                    },
+                    "required": ["invoice"]
+                }
+            },
+            {
+                "name": "persist_audit",
+                "description": "Persist audit log entries for compliance and tracking. Use this to store workflow execution history and decision trails.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": {"type": "string", "description": "Invoice identifier"},
+                        "audit_entries": {"type": "array", "description": "List of audit entries to store"}
+                    },
+                    "required": ["invoice_id", "audit_entries"]
+                }
+            },
+            {
+                "name": "parse_line_items",
+                "description": "Parse and extract line items from invoice text. Use this to structure raw OCR text into individual line items with quantities and prices.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Raw invoice text to parse"},
+                        "format_hint": {"type": "string", "description": "Optional format hint"}
+                    },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "normalize_vendor",
+                "description": "Normalize vendor name to canonical form. Use this to standardize vendor names for consistent matching and deduplication.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vendor_name": {"type": "string", "description": "Raw vendor name to normalize"},
+                        "tax_id": {"type": "string", "description": "Optional tax ID for validation"}
+                    },
+                    "required": ["vendor_name"]
+                }
+            },
+            {
+                "name": "create_checkpoint",
+                "description": "Create a workflow checkpoint for HITL (Human-in-the-Loop) review. Use this when matching fails and human review is required.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "thread_id": {"type": "string", "description": "Workflow thread identifier"},
+                        "state": {"type": "object", "description": "Current workflow state to checkpoint"},
+                        "reason": {"type": "string", "description": "Reason for checkpoint"}
+                    },
+                    "required": ["thread_id", "state"]
+                }
+            },
+            {
+                "name": "get_checkpoint",
+                "description": "Retrieve a previously created checkpoint. Use this to resume a paused workflow after human review.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "checkpoint_id": {"type": "string", "description": "Checkpoint identifier to retrieve"}
+                    },
+                    "required": ["checkpoint_id"]
+                }
+            },
+            {
+                "name": "compute_match",
+                "description": "Compute 2-way match between invoice and purchase order. Use this to calculate match score and identify discrepancies.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice": {"type": "object", "description": "Invoice data"},
+                        "purchase_orders": {"type": "array", "description": "List of POs to match against"},
+                        "tolerance_pct": {"type": "number", "description": "Tolerance percentage for matching"}
+                    },
+                    "required": ["invoice", "purchase_orders"]
+                }
+            },
+            {
+                "name": "build_entries",
+                "description": "Build accounting journal entries from invoice data. Use this to create debit/credit entries for ERP posting.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice": {"type": "object", "description": "Invoice data"},
+                        "account_mapping": {"type": "object", "description": "Account code mappings"}
+                    },
+                    "required": ["invoice"]
+                }
+            }
+        ],
+        "server": "COMMON",
+        "description": "Internal operations server - handles validation, storage, matching, and accounting"
+    }
 
 
 # ============================================================================

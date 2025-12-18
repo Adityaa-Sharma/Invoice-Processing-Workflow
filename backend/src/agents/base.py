@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional, TYPE_CHECKING
 from ..utils.logger import get_logger, create_audit_entry
 from ..tools.bigtool_picker import BigtoolPicker
-from ..services.llm_service import invoke_agent, select_tool_with_reasoning
+from ..services.llm_service import invoke_agent
 
 if TYPE_CHECKING:
     from ..graph.state import InvoiceWorkflowState
@@ -17,7 +17,7 @@ class BaseAgent(ABC):
     all stage-specific agents in the invoice processing workflow.
     
     Features:
-    - BigtoolPicker integration for dynamic tool selection
+    - BigtoolPicker integration for dynamic tool selection (True MCP Protocol)
     - LLM integration for intelligent processing
     - MCP server routing via BigtoolPicker
     """
@@ -77,29 +77,26 @@ class BaseAgent(ABC):
         """
         Select best tool for a capability.
         
-        Can use LLM for intelligent selection or fallback to
-        BigtoolPicker's priority-based selection.
+        Uses True MCP Protocol - discovers tools from servers and
+        uses LLM to select based on tool descriptions.
         
         Args:
             capability: Required capability
             context: Context for selection
-            use_llm: Whether to use LLM for selection
+            use_llm: Whether to use LLM for selection (True MCP always uses LLM)
             
         Returns:
             dict with selected tool and reasoning
         """
-        pool = self.bigtool.POOLS.get(capability, [])
-        
-        if use_llm and pool:
-            # Use LLM for intelligent tool selection
-            result = await select_tool_with_reasoning(
-                capability=capability,
-                pool=pool,
+        if use_llm:
+            # True MCP: Use LLM to select based on discovered tool descriptions
+            result = await self.bigtool.select_tool_by_description(
+                task=f"Select tool for {capability} capability",
                 context=context or {}
             )
             return result
         else:
-            # Use BigtoolPicker's priority-based selection
+            # Fallback to capability mapping
             return self.bigtool.select(capability, context)
     
     async def invoke_llm(

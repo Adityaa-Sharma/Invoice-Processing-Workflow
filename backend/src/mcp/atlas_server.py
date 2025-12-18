@@ -70,17 +70,120 @@ async def health():
 
 @app.get("/tools")
 async def list_tools():
-    """List available tools."""
-    return [
-        "extract_ocr",
-        "enrich_vendor",
-        "fetch_po_data",
-        "fetch_grn_data",
-        "post_to_erp",
-        "schedule_payment",
-        "send_notification",
-        "apply_policy"
-    ]
+    """
+    List available tools with descriptions (True MCP Protocol).
+    
+    Returns tool schemas that clients can use to dynamically discover
+    available capabilities and make intelligent tool selections.
+    """
+    return {
+        "tools": [
+            {
+                "name": "extract_ocr",
+                "description": "Extract text from invoice images/PDFs using OCR. Use this to digitize paper invoices or scanned documents. Supports multiple OCR providers (Google Vision, AWS Textract, Tesseract).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Path to file to process"},
+                        "provider": {"type": "string", "enum": ["google_vision", "aws_textract", "tesseract"], "description": "OCR provider to use"}
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "enrich_vendor",
+                "description": "Enrich vendor data with external information. Use this to get company details, risk scores, and industry information from data providers like Clearbit or People Data Labs.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vendor_name": {"type": "string", "description": "Vendor name to enrich"},
+                        "tax_id": {"type": "string", "description": "Optional tax ID for better matching"},
+                        "provider": {"type": "string", "enum": ["clearbit", "people_data_labs", "vendor_db"], "description": "Enrichment provider"}
+                    },
+                    "required": ["vendor_name"]
+                }
+            },
+            {
+                "name": "fetch_po_data",
+                "description": "Fetch Purchase Order data from ERP systems. Use this to retrieve PO details for invoice matching. Supports SAP, Oracle, NetSuite connectors.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "po_number": {"type": "string", "description": "PO number to fetch"},
+                        "vendor_name": {"type": "string", "description": "Vendor name for filtering"},
+                        "erp_system": {"type": "string", "enum": ["sap", "oracle", "netsuite"], "description": "ERP system to query"}
+                    }
+                }
+            },
+            {
+                "name": "fetch_grn_data",
+                "description": "Fetch Goods Receipt Notes from ERP. Use this to verify that goods were actually received before approving invoice payment.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "po_number": {"type": "string", "description": "Related PO number"},
+                        "vendor_name": {"type": "string", "description": "Vendor name"}
+                    }
+                }
+            },
+            {
+                "name": "post_to_erp",
+                "description": "Post approved invoice to ERP system. Use this to create accounting entries and update financial records in the ERP.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": {"type": "string", "description": "Invoice identifier"},
+                        "entries": {"type": "array", "description": "Accounting entries to post"},
+                        "erp_system": {"type": "string", "enum": ["sap", "oracle", "netsuite"], "description": "Target ERP system"}
+                    },
+                    "required": ["invoice_id", "entries"]
+                }
+            },
+            {
+                "name": "schedule_payment",
+                "description": "Schedule payment for approved invoice. Use this to create payment instruction based on payment terms and due date.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": {"type": "string", "description": "Invoice to pay"},
+                        "amount": {"type": "number", "description": "Payment amount"},
+                        "due_date": {"type": "string", "description": "Payment due date"},
+                        "payment_method": {"type": "string", "enum": ["ach", "wire", "check"], "description": "Payment method"}
+                    },
+                    "required": ["invoice_id", "amount"]
+                }
+            },
+            {
+                "name": "send_notification",
+                "description": "Send email notifications to stakeholders. Use this to notify vendors of payment status or internal teams of processing updates.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "recipients": {"type": "array", "description": "List of email recipients"},
+                        "subject": {"type": "string", "description": "Email subject"},
+                        "body": {"type": "string", "description": "Email body"},
+                        "provider": {"type": "string", "enum": ["sendgrid", "ses", "smtp"], "description": "Email provider"}
+                    },
+                    "required": ["recipients", "subject", "body"]
+                }
+            },
+            {
+                "name": "apply_policy",
+                "description": "Apply approval policies to invoice. Use this to determine if invoice can be auto-approved or needs escalation based on amount, vendor risk, or other rules.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "invoice": {"type": "object", "description": "Invoice data"},
+                        "vendor_risk_score": {"type": "number", "description": "Vendor risk score"},
+                        "policy_type": {"type": "string", "description": "Policy type to apply"}
+                    },
+                    "required": ["invoice"]
+                }
+            }
+        ],
+        "server": "ATLAS",
+        "description": "External operations server - handles OCR, enrichment, ERP integration, payments, and notifications"
+    }
 
 
 # ============================================================================
