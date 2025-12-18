@@ -32,6 +32,7 @@ export interface LogEntry {
   time: string;
   details?: Record<string, unknown>;
   logType?: 'info' | 'tool_call' | 'tool_selection' | 'tool_result' | 'result' | 'decision' | 'warning' | 'error' | 'hitl' | 'success';
+  eventId?: string; // Unique ID for deduplication
 }
 
 export interface ToolCallEntry {
@@ -42,6 +43,7 @@ export interface ToolCallEntry {
   params?: Record<string, unknown>;
   result?: Record<string, unknown>;
   time: string;
+  eventId?: string; // Unique ID for deduplication
 }
 
 export interface WorkflowState {
@@ -87,19 +89,48 @@ export function useWorkflow() {
   });
   const [loading, setLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const seenEventIds = useRef<Set<string>>(new Set()); // Track seen events for deduplication
 
-  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info', details?: Record<string, unknown>, logType?: LogEntry['logType']) => {
-    setState((s: WorkflowState) => ({
-      ...s,
-      logs: [...s.logs, { stage, message, status, time: new Date().toLocaleTimeString(), details, logType }],
-    }));
+  // Helper to format timestamp from ISO string
+  const formatTime = (isoTimestamp?: string): string => {
+    if (!isoTimestamp) return new Date().toLocaleTimeString();
+    try {
+      return new Date(isoTimestamp).toLocaleTimeString();
+    } catch {
+      return new Date().toLocaleTimeString();
+    }
+  };
+
+  // Generate event ID from event data for deduplication
+  const getEventId = (data: SSEEvent): string => {
+    // Use original timestamp + type + stage + message/tool as unique key
+    return `${data.timestamp}-${data.type}-${data.stage || ''}-${data.message || data.tool_name || data.status || ''}`;
+  };
+
+  const addLog = useCallback((stage: string, message: string, status: LogEntry['status'] = 'info', details?: Record<string, unknown>, logType?: LogEntry['logType'], eventId?: string, time?: string) => {
+    setState((s: WorkflowState) => {
+      // Check for duplicate by eventId
+      if (eventId && s.logs.some(log => log.eventId === eventId)) {
+        return s; // Skip duplicate
+      }
+      return {
+        ...s,
+        logs: [...s.logs, { stage, message, status, time: time || new Date().toLocaleTimeString(), details, logType, eventId }],
+      };
+    });
   }, []);
 
   const addToolCall = useCallback((toolCall: ToolCallEntry) => {
-    setState((s: WorkflowState) => ({
-      ...s,
-      toolCalls: [...s.toolCalls, toolCall],
-    }));
+    setState((s: WorkflowState) => {
+      // Check for duplicate by eventId
+      if (toolCall.eventId && s.toolCalls.some(tc => tc.eventId === toolCall.eventId)) {
+        return s; // Skip duplicate
+      }
+      return {
+        ...s,
+        toolCalls: [...s.toolCalls, toolCall],
+      };
+    });
   }, []);
 
   // Connect to SSE for real-time updates
@@ -122,8 +153,18 @@ export function useWorkflow() {
         const data: SSEEvent = JSON.parse(event.data);
         console.log('📡 SSE Event:', data);
 
+        // Generate unique event ID for deduplication
+        const eventId = getEventId(data);
+        
+        // Skip if we've already processed this event
+        if (seenEventIds.current.has(eventId)) {
+          console.log('⏭️ Skipping duplicate event:', eventId);
+          return;
+        }
+        seenEventIds.current.add(eventId);
+
         if (data.type === 'connected') {
-          addLog('SSE', 'Connected to real-time updates', 'info', undefined, 'info');
+          addLog('SSE', 'Connected to real-time updates', 'info', undefined, 'info', eventId, formatTime(data.timestamp));
           return;
         }
 
@@ -141,7 +182,8 @@ export function useWorkflow() {
             status: data.status as 'started' | 'completed' | 'failed',
             params: data.params,
             result: data.result,
-            time: new Date().toLocaleTimeString(),
+            time: formatTime(data.timestamp),
+            eventId,
           };
           addToolCall(toolCall);
           
@@ -153,7 +195,9 @@ export function useWorkflow() {
             `${emoji} Tool: ${data.tool_name}@${data.server} → ${data.status}`,
             logStatus as LogEntry['status'],
             { params: data.params, result: data.result },
-            'tool_call'
+            'tool_call',
+            `${eventId}-log`,
+            formatTime(data.timestamp)
           );
           return;
         }
@@ -161,7 +205,7 @@ export function useWorkflow() {
         if (data.type === 'log') {
           const logStatus = data.level === 'error' ? 'error' : 
                            data.level === 'warning' ? 'warning' : 'info';
-          addLog(data.stage || 'SYSTEM', data.message || '', logStatus, data.details, data.log_type as LogEntry['logType']);
+          addLog(data.stage || 'SYSTEM', data.message || '', logStatus, data.details, data.log_type as LogEntry['logType'], eventId, formatTime(data.timestamp));
           return;
         }
 
@@ -171,6 +215,15 @@ export function useWorkflow() {
           
           // Debug logging
           console.log(`📊 Stage update: ${stage} → ${stageStatus}`);
+
+          // Add log entry for stage start/complete
+          if (stageStatus === 'started') {
+            addLog(stage, `▶️ Starting ${stage}...`, 'info', data.data as Record<string, unknown>, 'info', eventId, formatTime(data.timestamp));
+          } else if (stageStatus === 'completed') {
+            addLog(stage, `✅ ${stage} completed`, 'success', data.data as Record<string, unknown>, 'result', eventId, formatTime(data.timestamp));
+          } else if (stageStatus === 'failed') {
+            addLog(stage, `❌ ${stage} failed`, 'error', data.data as Record<string, unknown>, 'error', eventId, formatTime(data.timestamp));
+          }
 
           setState((s: WorkflowState) => {
             const newState = { ...s };
@@ -220,15 +273,7 @@ export function useWorkflow() {
 
             return newState;
           });
-
-          // Add log for stage events
-          if (stageStatus === 'started') {
-            addLog(stage, `▶️ Starting ${stage}...`, 'info');
-          } else if (stageStatus === 'completed') {
-            addLog(stage, `✅ ${stage} completed`, 'success', data.data);
-          } else if (stageStatus === 'failed') {
-            addLog(stage, `❌ ${stage} failed: ${data.data?.error}`, 'error');
-          }
+          // Note: Stage logs are added above with proper eventId deduplication
         }
       } catch (err) {
         console.error('SSE parse error:', err);
@@ -253,6 +298,8 @@ export function useWorkflow() {
 
   const submit = useCallback(async (invoice: Invoice) => {
     setLoading(true);
+    // Reset seen events for new workflow
+    seenEventIds.current.clear();
     setState((s: WorkflowState) => ({ 
       ...s, 
       logs: [], 
